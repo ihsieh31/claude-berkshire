@@ -606,7 +606,8 @@ def write_thesis_result(conn: sqlite3.Connection, paths: Paths, ticker: str, aso
 
 def write_price_result(conn: sqlite3.Connection, paths: Paths, ticker: str, asof: str, run_id: str, *,
                        action: str, gate1: bool, gate2: str, gate3: str, cap: dict, price: float,
-                       price_date: str | None, t30: float | None, reason: str, notes: list[str]) -> str:
+                       price_date: str | None, t30: float | None, reason: str, notes: list[str],
+                       g8_adjusted: float | None = None) -> str:
     """PRICE 完成後回寫（僅不需升級時）：決策日誌、訊號卡（沿用上一張、更新數字並加 framework_notes）、
     登錄表合併更新（last_review_date、review_price、t30_at_valuation、auto_buy_cap、sell_review_above、
     absurd_price_line）。三表在同一交易內寫入。回傳 decision_id。"""
@@ -633,6 +634,7 @@ def write_price_result(conn: sqlite3.Connection, paths: Paths, ticker: str, asof
         "price_to_cap": cap.get("price_to_cap"), "implied_growth": cap.get("g_impl"),
         "g_impl_gt_cap": cap.get("g_impl_gt_cap"), "sell_review_above": cap.get("IV_base"),
         "absurd_price_line": cap.get("absurd_price_line"),
+        "g8_adjusted_expected_return": g8_adjusted,   # 以本次價格重算；沿用舊卡的值會用到舊價格
         "framework_notes": list(card.get("framework_notes") or [])
         + [f"{asof} PRICE（{action}）：{n}" for n in notes],
     })

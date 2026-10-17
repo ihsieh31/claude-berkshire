@@ -26,7 +26,9 @@ from ..data.universe import normalize_ticker
 from ..jobs.engine import Engine
 from ..llm.router import Router
 from ..models import JobSpec
+from ..ledger import book
 from ..paths import Paths
+from ..portfolio.holdings_view import watchlist_tickers, write_view
 from .analyze import _portfolio_state, base_params
 
 REGISTRY_SCHEMA = "berkshire-deep-merged/registry-v1"
@@ -69,6 +71,18 @@ def _last_closes(df: pd.DataFrame) -> dict[str, dict]:
         return {}
     last = df.sort_values(["ticker", "date"]).groupby("ticker").tail(1)
     return {r["ticker"]: {"price": float(r["close"]), "price_date": str(r["date"])} for r in last.to_dict("records")}
+
+
+def _held_closes(conn, alpaca, asof: str, last_px: dict[str, dict]) -> dict[str, dict]:
+    """G8 比較檔用：scope 範圍外的持股與觀察名單另抓決策日收盤；抓不到就缺，比較檔會標註。"""
+    out = dict(last_px)
+    miss = [t for t in dict.fromkeys(list(book.positions(conn)) + watchlist_tickers(conn)) if t not in out]
+    if miss and alpaca is not None:
+        start = (date.fromisoformat(asof) - timedelta(days=PRICE_LOOKBACK_DAYS)).isoformat()
+        bars = alpaca.bars(miss, start=start, end=asof, adjustment="raw")
+        if not bars.empty:
+            out.update(_last_closes(bars[bars["date"] <= asof][["ticker", "date", "close"]]))
+    return out
 
 
 def run_review(cfg: Config, paths: Paths, conn, asof: str, scope: str = "all", run_id: str | None = None,
@@ -216,6 +230,7 @@ def _execute(cfg, paths, conn, asof, scope, run_id, out, sec, alpaca, fred, rout
     # 9. 建工作：每檔至多一個起始工作
     entries_by_t = {e["ticker"]: e for e in entries}
     pstate = _portfolio_state(cfg, conn)
+    write_view(conn, paths, run_id, asof, _held_closes(conn, alpaca, asof, last_px), rates, fred)
     pe = get_frozen(paths, asof)
     router = router or Router(cfg, paths.routing_json, state_dir=paths.state)
     engine = Engine(conn, router, paths, cfg)

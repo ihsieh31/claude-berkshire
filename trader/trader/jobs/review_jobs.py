@@ -255,6 +255,25 @@ class TriageHandler(Handler):
 
 # ---------------------------------------------------------------- PRICE
 
+def _g8_check_add(ctx, job: JobSpec, g8_self: float | None, notes: list[str]) -> str:
+    """PRICE 加碼的 G8 勝負檢查（procedure/06 §2；與 FULL_B 同一判準）：明顯輸 → HOLD。
+    比較檔用本次 run 的 holdings_g8.json（排除本標的自己）；沒有比較檔只記錄，不擋（與 FULL_B 缺列一致），
+    但本標的自己算不出調整後預期報酬仍算輸。"""
+    from ..portfolio.holdings_view import for_ticker, g8_verdict, missing_rows, view_path
+    src = view_path(ctx.paths, job.run_id)
+    if src.is_file():
+        view = for_ticker(_read_json(src), job.ticker)
+        notes.extend(missing_rows(view))
+    else:
+        view = {}
+        notes.append("本次 run 沒有 G8 比較檔：加碼只檢查本標的能否算出調整後預期報酬")
+    lost, why = g8_verdict(g8_self, view)
+    if lost:
+        notes.append("G8 機會成本未勝出，不加碼（改 HOLD）：" + "；".join(why))
+        return "HOLD"
+    return "ADD"
+
+
 class PriceHandler(Handler):
     """機械快速通道：cap_calc 重算（只更新 price、long_rate、PE 中位）→ 模型整理 → 框架覆核與回寫。"""
     job_type = "PRICE"
@@ -358,11 +377,17 @@ class PriceHandler(Handler):
             notes.append(f"{seen} 的完整分析當時現價已低於上限仍未判 BUY：{RECENT_FULL_DAYS} 天內不重跑，維持 WATCH")
             result["framework_action"] = action
 
-        t30 = _read_json(td / "cap_input.json").get("long_rate")
+        from ..portfolio.holdings_view import self_adjusted
+        x = _read_json(td / "cap_input.json")
+        t30 = x.get("long_rate")
+        g8_self = self_adjusted(x, cap)
+        if action == "ADD":
+            action = _g8_check_add(ctx, job, g8_self, notes)
+            result["framework_action"] = action
         writeback.write_price_result(
             ctx.conn, ctx.paths, T, asof, job.run_id, action=action, gate1=gate1, gate2=gate2, gate3=gate3,
             cap=cap, price=price, price_date=p.get("price_date"), t30=t30,
-            reason=str(result.get("reason") or ""), notes=notes,
+            reason=str(result.get("reason") or ""), notes=notes, g8_adjusted=g8_self,
         )
         # SKILL §6 第 2 條（價格 ≥ IV_base → 賣出檢視：有更好用途 → 減碼或換股）：持股交 HOLD_REVIEW 走賣出決策樹，
         # 不由 PRICE（弱模型）直接決定。模型沒提但現價已 ≥ IV_base 也一樣送。

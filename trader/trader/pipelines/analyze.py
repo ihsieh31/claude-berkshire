@@ -5,6 +5,7 @@
   inputs/prices.csv 與 rates.json（價格與利率；只寫進價格檔，FULL_B 才開）。
 - 不在初選輸入裡的代號：以 fetch_inputs 抓該檔價格與利率到 run 目錄。
 - 組合狀態：M5 帳本未啟用前，以初始資金、無持股代入（明確標註）。
+- G8 持股比較檔：work/{run_id}/_portfolio/holdings_g8.json（持股與觀察名單以決策日收盤重算預期報酬，加國庫券與大盤；只給 FULL_B、HOLD_REVIEW）。
 - 大型股 P/E 中位：當月凍結值（沒有則上月；都沒有 → 缺，P4′ 不適用）。
 """
 from __future__ import annotations
@@ -24,6 +25,7 @@ from ..ledger import book
 from ..llm.router import Router
 from ..models import JobSpec
 from ..paths import Paths
+from ..portfolio.holdings_view import watchlist_tickers, write_view
 
 
 class AnalyzeError(Exception):
@@ -104,7 +106,8 @@ def run_analyze(cfg: Config, paths: Paths, conn, asof: str, tickers: list[str] |
     prices = _price_rows(sdir / "inputs" / "prices.csv") if sdir else {}
     rates_file = (sdir / "inputs" / "rates.json") if sdir else None
     rates = json.loads(rates_file.read_text(encoding="utf-8")) if rates_file and rates_file.is_file() else None
-    need = [t for t in tickers if t not in prices]
+    others = list(book.positions(conn)) + watchlist_tickers(conn)   # G8 比較檔要持股與觀察名單的決策日收盤
+    need = [t for t in dict.fromkeys(tickers + others) if t not in prices]
     if need or rates is None or "error" in (rates or {}):
         extra = paths.work / run_id / "_inputs"
         fetch_inputs(cfg, paths, conn, asof, extra, tickers=need or tickers[:1], clients=cl)
@@ -117,6 +120,7 @@ def run_analyze(cfg: Config, paths: Paths, conn, asof: str, tickers: list[str] |
     engine.ctx.sec = cl["sec"]
     engine.start_run(run_id, "analyze", asof)
     pstate = _portfolio_state(cfg, conn)
+    write_view(conn, paths, run_id, asof, prices, rates, cl.get("fred"))
     pe = get_frozen(paths, asof)
     added = []
     for t in tickers:

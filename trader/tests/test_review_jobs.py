@@ -508,6 +508,31 @@ def test_price_holding_below_target_weight_can_add(env):
     assert _decisions(conn)[-1]["data"]["action"] == "ADD"
 
 
+def _write_g8_view(paths, treasury_adj: float) -> None:
+    from trader.portfolio.holdings_view import view_path
+    v = view_path(paths, "r1")
+    v.parent.mkdir(parents=True, exist_ok=True)
+    v.write_text(json.dumps({"n_holdings": 1, "holdings": [], "watchlist": [],
+                             "benchmarks": {"treasury": {"adjusted": treasury_adj}, "market": {"error": "測試缺"}}}),
+                 encoding="utf-8")
+
+
+@pytest.mark.parametrize("treasury_adj, expected", [(0.9, "HOLD"), (0.0, "ADD")])
+def test_price_add_checks_g8_against_view(env, treasury_adj, expected):
+    paths, conn = env
+    _write_cap_input(paths)
+    _seed_registry(conn, "KO", "HOLDING", {"weight": 0.02, "target_weight": 0.05, "first_buy_date": "2020-01-01"})
+    _gate3_row(conn)
+    _write_g8_view(paths, treasury_adj)
+    result = _price_result(proposed_action="BUY_CANDIDATE")
+    _run_price(paths, conn, _price_params(price=_auto_cap() * 0.8), result)
+    d = _decisions(conn)[-1]["data"]
+    assert d["action"] == expected and result["framework_action"] == expected
+    notes = " ".join(d.get("framework_notes") or [])
+    assert "大盤一列缺" in notes
+    assert ("G8 機會成本未勝出" in notes) == (expected == "HOLD")
+
+
 def test_price_mechanical_no_change_stays_watch(env):
     paths, conn = env
     _write_cap_input(paths)

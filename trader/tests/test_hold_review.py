@@ -92,6 +92,11 @@ def test_holding_full_b_watch_then_business_sell_all(tmp_path):
     env.engine.run(RUN)
     assert [r["job_type"] for r in env.rows()] == ["FULL_A", "FULL_B", "HOLD_REVIEW"]
     assert _last_log(env)["action"] == "SELL_ALL"
+    # Q3「更好的用途」：HOLD_REVIEW 沙箱有 G8 比較檔，本持股放在 self、不在比較對象內
+    from pathlib import Path
+    g8 = json.loads((Path(env.by_type("HOLD_REVIEW")[0]["sandbox"]) / "portfolio" / "holdings_g8.json")
+                    .read_text(encoding="utf-8"))
+    assert g8["self"]["ticker"] == "KO" and g8["holdings"] == [] and g8["excluded_self"] == "KO"
     reg = json.loads(env.conn.execute("SELECT data FROM registry WHERE ticker='KO'").fetchone()["data"])
     assert reg["thesis_file"] == "theses/KO_2024-01-02.md" and reg["first_buy_date"] == "2024-01-02"
     plans = S.plan_sells(env.conn, ASOF, S.load_decisions(env.conn, ASOF), {"KO": 60.0})

@@ -21,6 +21,7 @@ H2 賣出決策樹（rulebook §9 原文照錄）：
 3. Q2「論點被證偽」要具名：哪一條關鍵假設或失效條件，被哪一個事實否定（寫在 falsified_assumption）。只是接近、方向不利、證據未完整 → 「只是疑似」→ HOLD、stop_adding＝true、observe_until 填 P-50 期限（兩次季報或 6 個月，取先到者）。
 4. 會計警訊級（RISK-061 W 類）在持有中屬「完整複查 → Q2」：確認是會計問題（SELL-027(A)）才全清；只是警訊未確認 → 疑似。
 5. Q3 只能用「完整分析」給的 IV_base 與 cap_calc 數字；完整分析未走到估值（停在 G7 之前）→ Q3 一律「不適用（無 IV）」。
+   Q3 要判斷「有明顯更好的用途」時，只能用 `portfolio/holdings_g8.json` 的數字比較：`self` 是本持股以決策日收盤重算的調整後預期報酬，對照 `best_addable`（加碼其他持股）、`best_watch`（觀察名單今天可買者）、`benchmarks.treasury`、`benchmarks.market`。差 <1pp 視為沒有更好用途；比較檔缺本持股或某列缺值 → 該列不得當作換股理由。成本與買進價不得當理由。
 6. 業務類不得只賣一部分（TRIM 不可用於業務類）。TRIM 只用於 Q3c 的頂級複利型減碼（每次 ≤1/4）或荒謬級（至少一半），trim_fraction 寫比例。
 7. 建倉未滿 2 年（Q5）：寫不出「哪條假設被哪個事實否定」→ 持有。
 8. 有疑義時：不賣，HOLD＋stop_adding＝true。

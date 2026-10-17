@@ -35,6 +35,7 @@ cd trader && python3 -m pip install -e ".[dev]"
 - **初篩排序**：非金融六項中「營收成長偏低」改為中性，換成「5 年最差 ROE 高」。目的是提高送進深度分析者通過 G3 的比例，**未回測、不宣稱提高報酬**；2–3 季後比較 G3 命中率再決定是否保留（`berkshire-screen-merged/references/evidence_statistical.md` §2）。
 - **G3 淘汰依據**：FULL_A 輸出新增 `moat_evidence`，寫回記 `reject_basis`（有反證／證據不足／其他），停止碼與 12 個月排除不變。「強」的證據標準不放寬，等 `reject_basis` 累積 2–3 季再議。
 - **資料包補強**：Form 4 內部人交易（只列股數，不含價格）、財報 8-K 的 EX-99.2 等補充資料／簡報、10-K 的 EX-13 致股東年報、10-K 點名但不在 S&P 500 的競爭者、產業衝擊年樣本不足時以 SEC 同 SIC 公司補樣本。
+- **G8 機會成本（2026-10-18）**：框架算好比較表各列給 FULL_B 與 HOLD_REVIEW——加碼最佳持股、最弱持股、觀察名單今天可買者（決策日收盤＋cap_inputs 重算）、3 個月國庫券、大盤（P-66 權益 ÷ GDP 分區 → P-27，區內取值為推論）；任一列高出本標的 ≥1pp 時 BUY 改 WATCH、PRICE 通道的加碼改 HOLD。訊號卡 `g8_adjusted_expected_return` 由腳本重算，排序以當日報價重算。
 - 第三次全專案審查的 H1／H2／M1–M5／L2 已修，詳見 `bug report/review3/REPORT_第三次全專案審查.md` 與 `handoff.md`。
 
 ## skill 說明
@@ -76,7 +77,7 @@ cd trader && python3 -m pip install -e ".[dev]"
 - `build_dossier.py`：真實 SEC 資料產出 10 年表與資料品質警示；合成資料驗證 EPS 不一致、整數 EPS、現金流偏低、缺年四種警示。
 - 試點：sonnet 子代理對一檔大型股跑完整深度分析（只給數字、不給年報文字）→ 正確停在 `MISSING_DATA`、價格隔離有遵守；回饋 23 項已全部處理。
 - 真實資料：本機 SEC XBRL 與日線股價，40 檔大型股跑通初篩；發現並修正封面股數過期、金融股近似誤判、特殊道收錄過寬三個問題。
-- `trader/`：744 個測試全過（2026-10-17）；SQLite 完整性檢查 ok；`daily --dry-run`、`review --due-only` 對真實 Alpaca／SEC／FRED 驗證過。
+- `trader/`：772 個測試全過（2026-10-18）；SQLite 完整性檢查 ok；`daily --dry-run`、`review --due-only` 對真實 Alpaca／SEC／FRED 驗證過。
 - 2026-10-15 第一批 15 檔真實深度分析：零 BUY（OTIS＝WATCH C 級、LOW＝TOO_HARD、其餘 REJECT）。這批將在換機重跑後封存為樣本，不再採用（見 `換機匯出與封存程序.md`）。
 
 ## 已知限制

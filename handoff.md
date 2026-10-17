@@ -359,3 +359,21 @@ plan.md、handoff.md 另外複製。
 - **換機**：`換機匯出與封存程序.md`（匯出清單與 9 條檢查、`.backup` 打包、本機封存四層隔離、替換、還原）。注意 launchd 的 dashboard／widget 有 KeepAlive，替換前須 `desktop uninstall`。
 - **未做**：法說會逐字稿（SEC 沒有）、留存率數字；`cap_input_file` 仍存絕對路徑（使用者決定先不改，目前無程式讀取）。
 
+
+## 2026-10-18 G8 持股比較檔
+測試 755 個全過（原 744 + 11），同日補完後 770 個。未呼叫模型；帳上仍 0 檔持股，真實持倉下未跑過。
+- **問題**：FULL_B 的 G8 要比「加碼現有最佳持股」，原本只拿到持股成本（`portfolio_state`），沒有持股的價值、等級、預期報酬；排序欄 `g8_adjusted_expected_return` 也從未有卡寫入。
+- **作法**（使用者決定用決策日收盤價，成本權重保留當參考；procedure/06 §2 與 CORE-07 不得以自身買價作門檻）：
+  - `trader/portfolio/holdings_view.py`：每檔持股以 `state/cap_inputs/{T}.json`（已隨拆合股換算）換上決策日收盤與當日長債重跑 cap_calc；預期報酬＝oe ÷ 收盤＋保守 g0，×等級係數（A 0.9／B 0.75／C 0.5）。列市價權重、成本權重、可否加碼（異常暫停、`add_blocked`、權重 >15%、等級非 A／B）、`best_addable`、持股 ≥10 檔時的 `weakest`。論點檢查等快速工作的無估值卡跳過。
+  - `pipelines/analyze.py`、`review.py`：抓價時含持股（review 的 scope 不含持股時另抓），寫 `work/{run}/_portfolio/holdings_g8.json`；**不進工作參數**（參數會沿用到 FULL_A）。
+  - `FullBHandler.prepare`：排除本標的後放進 FULL_B 沙箱 `portfolio/holdings_g8.json`；DOSSIER／FULL_A／RED_TEAM 沒有。舊 run 沒比較檔 → 以帳本重建、收盤價缺並附 `warning`。
+  - FULL_B 摘要新增 `g8` 比較表（`output_schemas.json`）；訊號卡新增 `g8_adjusted_expected_return`（`signal_card_schema.json`），FULL_B post 與 PRICE 快速通道**以腳本重算寫入**（模型數字落差只記日誌，不改訊號）。`sizing._rank_key` 從此可用這欄排序。
+- **同日補完**（使用者要求直接做完再回報，測試 770 個全過）：
+  - **國庫券、大盤兩列**（`portfolio/g8_benchmarks.py`、`data/fred.py` 新增 `latest`、`equity_gdp`）：國庫券＝FRED DGS3MO；大盤＝P-66 衍生數列（NCBEILQ027S ÷ GDP，季初日期 +170 天才算公布；FRED 是修正後數值，回測不可用）分區 → P-27。區內取值與摩擦是推論：低 11%、中 8%→5%、高 5%→3% 線性、極高 3%，扣 1pp，×0.8。10-16 實測：比值 255%、分位 100 → 極高，大盤調整後 1.6%；國庫券 4.28%。
+  - **觀察名單次佳**：登錄表 WATCH 且未持有者，以決策日收盤重算；只有 A／B 級且收盤 < 重算的自動買進上限才算可得選項（`best_watch`）。
+  - **G8 輸了自動降級**（`FullBHandler.post`）：任一列高出本標的 ≥1pp、持股 ≥10 檔時最弱持股高出 ≥1pp、或本標的算不出 → BUY 改 WATCH（`stopped_at_gate`＝G8），不跑 RED_TEAM；差 <1pp 交模型依品質。比較檔缺列只記日誌，不擋。實際效果：B 級標的預期報酬須 ≥ 約 4.4% 才不會輸給國庫券。
+  - **排序**：`plan_buys(cap_dir=…)` 以當日報價＋cap_inputs 重算每張候選卡的 G8（`sizing.live_g8`），新舊卡同一層比；沒有 cap_inputs 才用卡上存的值，再沒有才退回 price_to_conservative。
+  - **HOLD_REVIEW**：沙箱也放比較檔（本持股在 `self`），提示 Q3「明顯更好的用途」只能用這份數字比、差 <1pp 不算。
+  - 規則文件：SKILL.md G8 行、procedure/06 §2、procedure/08 資料表已註明框架給數字與推論參數。
+- **PRICE 加碼補 G8 檢查**（同日，測試 772 個全過）：`review_jobs._g8_check_add` 用本次 run 的比較檔（排除本標的）與 FULL_B 同一判準（`g8_verdict`），明顯輸 → ADD 改 HOLD 並記理由；run 沒有比較檔只記錄不擋。PRICE 的新部位 BUY 本來就升級為完整分析（走 FULL_B 的 G8），不需另補。
+- **仍未做**：相關群上限（P-31／P-32）；沒用真模型跑過、帳上 0 檔持股。

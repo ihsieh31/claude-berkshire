@@ -306,6 +306,19 @@ class FullAHandler(Handler):
 
 # ---------------------------------------------------------------- FULL_B
 
+def stage_g8_view(ctx, job, td: Path) -> Path:
+    """G8 比較檔（排除本標的自己）寫到 td/holdings_g8.json，回傳路徑（FULL_B、HOLD_REVIEW 共用）。
+    run 沒寫比較檔（舊 run）→ 以帳本重建：收盤價與 FRED 缺，逐列標註並附 warning。"""
+    from ..portfolio.holdings_view import for_ticker, holdings_g8, view_path
+    src = view_path(ctx.paths, job.run_id)
+    view = (_read_json(src) if src.is_file()
+            else {**holdings_g8(ctx.conn, ctx.paths, job.asof, {}, None),
+                  "warning": "本次 run 沒有 G8 比較檔：收盤價與國庫券、大盤缺，無法計算各列預期報酬"})
+    out = td / "holdings_g8.json"
+    _write_json(out, for_ticker(view, job.ticker))
+    return out
+
+
 class FullBHandler(Handler):
     """價格此時才給。後置：cap_calc 覆核（不一致退回一次，再不一致以腳本為準）、閘門降級、BUY → RED_TEAM。"""
     job_type = "FULL_B"
@@ -322,6 +335,7 @@ class FullBHandler(Handler):
         for n in job.params.get("prior_files") or []:   # 退回重寫：附上一版輸出
             if (td / n).is_file():
                 items.append((td / n, f"{T}/previous/{n}"))
+        items.append((stage_g8_view(ctx, job, td), "portfolio/holdings_g8.json"))
         names = stage_inputs(sb, items, job.job_type)
         (sb / "dossier").mkdir(exist_ok=True)
         # 只有 gate3 答覆檔存檔早於本工作建立時間才開價格檔
@@ -371,12 +385,18 @@ class FullBHandler(Handler):
             card = apply_cap_override(card, cap)
             _write_json(td / "signal_card.json", card)
             notes.append("cap_calc 覆核兩次不一致，訊號卡上限與 IV 以腳本覆寫：" + "；".join(diffs))
+        g8_lost, g8_why = _g8_writeback(td, card, cap, result, notes)
         signal = card.get("signal") or result.get("signal")
         if result.get("signal") and result.get("signal") != signal:
             notes.append(f"摘要訊號 {result.get('signal')} 與訊號卡 {signal} 不同，以訊號卡為準")
         sd = (job.params.get("screen_context") or {}).get("screen_decision")
         signal, why = cap_signal_by_gates(signal, g3, sd, cap)
         notes += why
+        if signal == "BUY" and g8_lost:   # SKILL G8：輸了 → WATCH；差 <1pp 交模型依品質
+            signal = "WATCH"
+            card["stopped_at_gate"] = "G8"
+            _write_json(td / "signal_card.json", card)
+            notes.append("G8 機會成本未勝出，BUY → WATCH：" + "；".join(g8_why))
         if signal == "BUY":
             return [next_job(job, "RED_TEAM", ctx, _carry(job, {
                 "redteam_round": int(job.params.get("redteam_round", 0)), "notes": notes}))]
@@ -400,6 +420,18 @@ class FullBHandler(Handler):
 
 
 # ---------------------------------------------------------------- RED_TEAM
+
+def _g8_writeback(td: Path, card: dict, cap: dict, result: dict, notes: list[str]) -> tuple[bool, list[str]]:
+    """訊號卡 g8_adjusted_expected_return 以腳本重算（與比較檔同一算法）；模型比較表的落差、缺列記入 notes。
+    回傳 (G8 是否明顯輸, 理由)，由呼叫端決定是否降級。"""
+    from ..portfolio.holdings_view import g8_notes, g8_verdict, missing_rows, self_adjusted
+    adj = self_adjusted(_read_json(td / "cap_input.json"), cap)
+    card["g8_adjusted_expected_return"] = adj
+    _write_json(td / "signal_card.json", card)
+    staged = _read_json(td / "holdings_g8.json") if (td / "holdings_g8.json").is_file() else {}
+    notes += g8_notes((result or {}).get("g8"), adj, staged) + missing_rows(staged)
+    return g8_verdict(adj, staged)
+
 
 def _cap_grade_by_c1(td: Path, g3: dict | None, card: dict, notes: list[str]) -> bool:
     """閘門 3 的 C1（可預見年限）決定等級上限（gate3_check max_grade_from_C1）：cap_input 與訊號卡等級較高時壓低。

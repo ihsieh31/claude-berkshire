@@ -103,6 +103,9 @@ GOOD = {
         "auto_buy_cap": None,
         "target_weight": 0,
         "first_tranche_weight": 0,
+        "g8": {"self_adjusted": 0.061, "best_holding": None, "best_holding_adjusted": None,
+               "weakest_holding_adjusted": None, "best_watch": None, "best_watch_adjusted": None,
+               "treasury": 0.042, "market": 0.048, "winner": "大盤"},
         "files": ["report.md", "signal_card.json"],
     },
     "RED_TEAM": {

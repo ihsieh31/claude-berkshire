@@ -1,4 +1,4 @@
-"""FRED 資料來源：30 年期公債殖利率（DGS30）。
+"""FRED 資料來源：30 年期公債殖利率（DGS30）；G8 用的 3 個月國庫券（DGS3MO）與非金融公司權益 ÷ GDP（NCBEILQ027S、GDP）。
 
 有 API 金鑰走 JSON API；無金鑰走公開 CSV。快取過期重抓；抓失敗而有快取時用快取。
 """
@@ -8,7 +8,7 @@ import csv
 import io
 import json
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +18,8 @@ from trader.data.http import DataError, HttpClient
 API_URL = "https://api.stlouisfed.org/fred/series/observations"
 CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 OBS_START = "1977-01-01"
+LONG_START = {"NCBEILQ027S": "1945-01-01", "GDP": "1945-01-01"}   # 權益 ÷ GDP 分位要用全部歷史
+Z1_LAG_DAYS = 170          # 推論：季初日期 + 170 天 ≈ 季末後 10 週 Z.1 公布
 
 
 def _num(s: str | None) -> float | None:
@@ -58,7 +60,7 @@ class FredClient:
             "series_id": series_id,
             "api_key": self.api_key,
             "file_type": "json",
-            "observation_start": OBS_START,
+            "observation_start": LONG_START.get(series_id, OBS_START),
         })
         if not isinstance(data, dict) or "observations" not in data:
             raise DataError(f"FRED 回應缺少 observations：{series_id}")
@@ -128,3 +130,25 @@ class FredClient:
         if w.empty:
             raise DataError(f"DGS30 在 {start} 至 {asof} 間無資料")
         return float(w.median()) / 100
+
+
+    def latest(self, series_id: str, asof: str) -> tuple[float, str]:
+        """最後一個日期 < asof 的原始值與日期（不換算單位）。"""
+        s = self.series(series_id)
+        s = s[s.index < asof]
+        if s.empty:
+            raise DataError(f"{series_id} 在 {asof} 前無資料")
+        return float(s.iloc[-1]), str(s.index[-1])
+
+    def equity_gdp(self, asof: str, lag_days: int = Z1_LAG_DAYS) -> pd.Series:
+        """非金融公司權益（NCBEILQ027S，百萬美元）÷ 名目 GDP（十億美元）的季序列，小數（2.55 = 255%）。
+
+        只留「季初日期 + lag_days < asof」的季度：FRED 以季初標日期，Z.1 約在季末後 10 週公布（推論：取 170 天）。
+        注意 FRED 給的是修正後數值，不是當時版本；只供當期使用，回測不可用。"""
+        eq, gdp = self.series("NCBEILQ027S"), self.series("GDP")
+        df = pd.concat({"eq": eq, "gdp": gdp}, axis=1).dropna()
+        cutoff = (date.fromisoformat(asof) - timedelta(days=lag_days)).isoformat()
+        df = df[df.index < cutoff]
+        if df.empty:
+            raise DataError(f"NCBEILQ027S／GDP 在 {cutoff} 前無資料")
+        return (df["eq"] / 1000.0) / df["gdp"]

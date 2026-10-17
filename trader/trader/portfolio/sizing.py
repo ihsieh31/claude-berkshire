@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 from datetime import date as _date
+from pathlib import Path
 from typing import Any
 
 from .. import db
@@ -116,14 +117,32 @@ def build_amount(t: float, equity: float, mv: float, tranches_left: int) -> floa
     return max(0.0, (t * equity - mv) / tranches_left)
 
 
-def _rank_key(card: dict, quote: float | None) -> tuple:
-    """排序（名額或現金不足時使用）。
+def live_g8(cap_dir: Path | None, ticker: str, quote: float | None) -> float | None:
+    """以 cap_inputs 換上當日報價重算 G8 調整後預期報酬（與 FULL_B、比較檔同一算法）；缺檔、缺價或算不出 → None。"""
+    if cap_dir is None or not quote:
+        return None
+    f = Path(cap_dir) / f"{ticker}.json"
+    if not f.is_file():
+        return None
+    from ..analysis.checks import _round, _skill_module, cap_input_problems
+    from .holdings_view import self_adjusted
+    try:
+        x = {**json.loads(f.read_text(encoding="utf-8")), "price": float(quote)}
+        if cap_input_problems(x):
+            return None
+        return self_adjusted(x, _round(_skill_module("cap_calc").calc(x)))
+    except Exception:  # noqa: BLE001 - 算不出就退回下一層排序
+        return None
 
-    G8 調整後預期報酬：訊號卡 schema 目前沒有此欄位（推論：未來可能加入，讀取點保留為 g8_adjusted_expected_return）。
-    缺欄位時退回 price_to_conservative 升冪（推論：價格相對保守價值越低越優先）。
-    price_to_conservative 優先用即時報價 ÷ 訊號卡的保守每股價值（IV_cons），取不到才用訊號卡的舊值。
+
+def _rank_key(card: dict, quote: float | None, live: float | None = None) -> tuple:
+    """排序（名額或現金不足時使用）：G8 調整後預期報酬由高到低。
+
+    同一層才可比：第 0 層用當日報價重算的值（live_g8；新舊卡都有 cap_inputs 就都在這層）；
+    沒有 cap_inputs 時退回訊號卡存的 g8_adjusted_expected_return（分析日價格）；
+    都沒有 → 第 1 層，price_to_conservative 升冪（推論：價格相對保守價值越低越優先；即時報價 ÷ IV_cons 優先）。
     """
-    g8 = card.get("g8_adjusted_expected_return")
+    g8 = live if live is not None else card.get("g8_adjusted_expected_return")
     if g8 is not None:
         return (0, -float(g8))
     cons = (card.get("value_per_share") or {}).get("conservative")
@@ -263,11 +282,12 @@ def _days_between(later: str, earlier: str) -> int:
 # ---------------------------------------------------------------- 對外：計畫
 
 def plan_buys(conn, asof, decisions: list[dict], quotes: dict[str, float],
-              adv: dict[str, float], slippage_bps: float) -> list[dict]:
+              adv: dict[str, float], slippage_bps: float, cap_dir: Path | None = None) -> list[dict]:
     """BUY／ADD 的計畫。decisions 為 load_decisions 的結果（可含其他 action，會被忽略）。
 
     quotes：當日收盤（參考報價；推論：實際下單參考價以收盤代替）。adv：20 日平均成交額（美元）。
     新部位（未持有）的金額 = 首批比例 × T × 權益；ADD（已持有）依建倉計畫的批次公式。
+    cap_dir：state/cap_inputs（排序用當日報價重算 G8；None 時只用訊號卡存的值）。
     """
     closes = {t: float(p) for t, p in quotes.items() if p is not None}
     equity = book.equity(conn, closes)
@@ -277,7 +297,8 @@ def plan_buys(conn, asof, decisions: list[dict], quotes: dict[str, float],
     open_buys = _open_buys_by_ticker(conn)
 
     cands = [d for d in _last_per_ticker(decisions) if d.get("action") in ("BUY", "ADD")]
-    cands.sort(key=lambda d: _rank_key(d.get("card") or {}, quotes.get(d["ticker"])))
+    cands.sort(key=lambda d: _rank_key(d.get("card") or {}, quotes.get(d["ticker"]),
+                                       live_g8(cap_dir, d["ticker"], quotes.get(d["ticker"]))))
     plans: list[dict] = []
     n_new = 0
 

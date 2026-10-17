@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from pathlib import Path
 
 from trader import db
@@ -158,12 +160,18 @@ def full_a(stopped: bool = False) -> dict:
     }
 
 
+G8_NONE = {"self_adjusted": None, "best_holding": None, "best_holding_adjusted": None,
+           "weakest_holding_adjusted": None, "best_watch": None, "best_watch_adjusted": None,
+           "treasury": None, "market": None, "winner": "未比較"}
+
+
 def full_b(signal: str = "BUY") -> dict:
     return {
         "ticker": "KO", "decision_id": "KO-20261016-1", "signal": signal,
         "reason_code": "PASS_ALL" if signal == "BUY" else "TOO_HARD",
         "stopped_at_gate": None, "certainty_grade": "B",
         "auto_buy_cap": 12.5, "target_weight": 0.05, "first_tranche_weight": 0.025,
+        "g8": G8_NONE,
         "files": {"KO/cap_input.json": json.dumps(CAP_INPUT), "KO/report.md": "# 報告\n",
                   "KO/signal_card.json": json.dumps(consistent_card(signal), ensure_ascii=False),
                   "KO/registry_entry.json": json.dumps({"ticker": "KO", "status": "WATCH"}),
@@ -216,12 +224,54 @@ def test_full_dag_runs_to_done(tmp_path):
     for jt in ("DOSSIER", "FULL_A"):
         sb = Path(env.by_type(jt)[0]["sandbox"])
         assert list(sb.rglob("*_price.json")) == []
+    # G8 持股比較檔只進 FULL_B；訊號卡的 G8 調整後預期報酬由腳本重算：(oe ÷ 價格 ＋ 保守 g0) × B 0.75
+    assert (fb_sandbox / "portfolio" / "holdings_g8.json").is_file()
+    for jt in ("DOSSIER", "FULL_A", "RED_TEAM"):
+        assert list(Path(env.by_type(jt)[0]["sandbox"]).rglob("holdings_g8.json")) == []
+    card = json.loads(env.conn.execute("SELECT data FROM signals").fetchone()[0])
+    assert card["g8_adjusted_expected_return"] == pytest.approx((5.0 / 60.0 + 0.045) * 0.75, abs=1e-4)
     # gate3 答覆檔由 FULL_A 收集到同檔輸出區，且早於 FULL_B 建立時間
     td = env.paths.work / RUN / "KO"
     gate3 = td / "gate3_answers.json"
     assert gate3.is_file()
     fb_created = json.loads(env.by_type("FULL_B")[0]["params"])["created_ts"]
     assert gate3.stat().st_mtime < fb_created
+
+
+def _g8_view(env, best_adj: float) -> None:
+    from trader.portfolio.holdings_view import view_path
+    f = view_path(env.paths, RUN)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    row = {"ticker": "PEP", "grade": "A", "expected_return": best_adj / 0.9, "adjusted_expected_return": best_adj,
+           "addable": True}
+    f.write_text(json.dumps({"n_holdings": 1, "holdings": [row], "watchlist": [],
+                             "benchmarks": {"treasury": {"adjusted": 0.04}, "market": {"adjusted": 0.016}}}),
+                 encoding="utf-8")
+
+
+def test_g8_clear_loss_downgrades_buy_to_watch(tmp_path):
+    """最佳持股高出本標的 ≥1pp → BUY 改 WATCH（停在 G8），不跑 RED_TEAM。本標的 (5/60+0.045)×0.75≈0.0963。"""
+    env = make_env(tmp_path, full_responses())
+    _g8_view(env, 0.12)
+    env.add(env.job("KO", "DOSSIER", 1))
+    env.price_file("KO")
+    env.engine.run(RUN)
+    assert [r["job_type"] for r in env.rows()] == ["DOSSIER", "FULL_A", "FULL_B"]
+    dec = env.conn.execute("SELECT signal, data FROM decisions").fetchone()
+    assert dec["signal"] == "WATCH"
+    assert any("G8 機會成本未勝出" in n and "PEP" in n for n in json.loads(dec["data"])["framework_notes"])
+    card = json.loads(env.conn.execute("SELECT data FROM signals").fetchone()[0])
+    assert card["stopped_at_gate"] == "G8" and card["signal"] == "WATCH"
+
+
+def test_g8_tie_within_1pp_keeps_buy(tmp_path):
+    env = make_env(tmp_path, full_responses())
+    _g8_view(env, 0.10)
+    env.add(env.job("KO", "DOSSIER", 1))
+    env.price_file("KO")
+    env.engine.run(RUN)
+    assert "RED_TEAM" in [r["job_type"] for r in env.rows()]
+    assert env.conn.execute("SELECT signal FROM decisions").fetchone()[0] == "BUY"
 
 
 # ---------------------------------------------------------------- 2. FULL_A 停止

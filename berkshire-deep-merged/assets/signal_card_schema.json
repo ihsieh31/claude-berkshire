@@ -51,6 +51,7 @@
  "price_date": "",
  "price_to_conservative": null,
  "price_to_cap": null,
+ "g8_adjusted_expected_return": null,
  "implied_growth": null,
  "target_weight_pct": null,
  "max_weight_pct": {

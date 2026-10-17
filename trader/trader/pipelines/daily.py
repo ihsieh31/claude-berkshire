@@ -295,7 +295,8 @@ def run_daily(cfg: Config, paths: Paths, conn, date: str, clients: dict[str, Any
             for p in tranches:
                 _place(conn, p, date, nxt, write, out)
 
-            buys = Z.plan_buys(conn, date, buy_items, closes, adv, cfg.account.slippage_bps)
+            buys = Z.plan_buys(conn, date, buy_items, closes, adv, cfg.account.slippage_bps,
+                               cap_dir=paths.state / "cap_inputs")
             for p in buys:
                 _place(conn, p, date, nxt, write, out)
             out["buys"] = [_tp(p) for p in buys]

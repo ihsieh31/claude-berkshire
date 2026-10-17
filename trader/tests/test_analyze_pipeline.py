@@ -47,6 +47,9 @@ def test_run_analyze_from_screen(tmp_path, monkeypatch):
     p = json.loads(dossier_job["params"])
     assert p["price"] == 60.5 and p["rates"]["t30"] == 0.05
     assert p["portfolio_state"]["holdings"] == []
+    from trader.portfolio.holdings_view import view_path
+    assert json.loads(view_path(paths, run).read_text(encoding="utf-8"))["holdings"] == []
+    assert "holdings_g8" not in json.dumps(p)          # 比較檔不進工作參數（FULL_A 會沿用參數）
     # FULL_A 的提示看不到價格
     fa = [c for c in fake.calls if c.job_type == "FULL_A"][0]
     assert "60.5" not in fa.prompt_text
@@ -70,3 +73,21 @@ def test_portfolio_state_with_holdings_has_cash_committed_and_no_market_price(tm
     assert (h["ticker"], h["qty"], h["avg_cost"], h["cost_value"]) == ("KO", 100, 60.0, 6000.0)
     assert h["cost_weight"] == round(6000 / 106_000, 4)
     assert not {"price", "close", "market_value", "weight"} & set(h)
+
+
+def test_review_held_closes_fetches_missing_holdings(tmp_path):
+    """scope 不含持股時，G8 比較檔另抓持股的決策日收盤（不晚於決策日）。"""
+    from trader.pipelines.review import _held_closes
+    conn = db.connect(get_paths(state_dir=tmp_path / "state").ensure().db)
+    db.migrate(conn)
+    db.insert(conn, "positions", {"ticker": "KO", "qty": 1, "avg_cost": 60.0, "first_buy_date": "2026-10-02",
+                                  "updated_at": "2026-10-02"})
+
+    class Alp:
+        def bars(self, tickers, start, end, adjustment):
+            assert tickers == ["KO"] and end == ASOF
+            return pd.DataFrame([{"ticker": "KO", "date": "2026-10-15", "close": 61.0},
+                                 {"ticker": "KO", "date": "2026-10-17", "close": 99.0}])
+    out = _held_closes(conn, Alp(), ASOF, {"PEP": {"price": 150.0, "price_date": ASOF}})
+    assert out["KO"] == {"price": 61.0, "price_date": "2026-10-15"} and "PEP" in out
+    assert _held_closes(conn, None, ASOF, {}) == {}

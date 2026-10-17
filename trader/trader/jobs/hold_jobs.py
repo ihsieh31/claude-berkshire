@@ -18,7 +18,7 @@ from typing import Any
 
 from .. import db
 from ..ledger import book
-from .deep import _skill_inputs, _td, _vals, _file_sections, _read_json
+from .deep import _skill_inputs, _td, _vals, _file_sections, _read_json, stage_g8_view
 from .handlers import Handler, next_job
 from .review_jobs import _stage_thesis
 from .sandbox import create_sandbox, stage_inputs
@@ -117,6 +117,7 @@ class HoldReviewHandler(Handler):
         T = job.ticker
         items = _skill_inputs(ctx)
         items += [(td / n, f"{T}/{n}") for n in INPUT_FILES if (td / n).is_file()]
+        items.append((stage_g8_view(ctx, job, td), "portfolio/holdings_g8.json"))   # Q3「更好的用途」
         names = stage_inputs(sb, items, job.job_type)
         names += _stage_thesis(sb, job, ctx.paths)
         return _file_sections(sb, [n for n in names if not n.startswith("pkg/")])
@@ -140,7 +141,7 @@ class HoldReviewHandler(Handler):
             "full_status": full,
             "thesis_result": "```json\n" + json.dumps(tr, ensure_ascii=False, indent=1) + "\n```" if tr
                              else "（無：本次不是由論點檢查觸發）",
-            "files": "、".join(files + ["thesis/（論點檔與增補）"]),
+            "files": "、".join(files + ["portfolio/holdings_g8.json（G8 比較檔）", "thesis/（論點檔與增補）"]),
             "sell_tree": sell_tree_text(ctx.paths.skill_deep),
         })
 

@@ -134,6 +134,18 @@
   "auto_buy_cap": "數字或 null",
   "target_weight": "小數或 0",
   "first_tranche_weight": "小數或 0",
+  "g8": {
+   "_說明": "G8 比較表（procedure/06 §2）；未走到 G8（停在 G7 或之前）時數字填 null、winner 填 未比較。各列照抄 portfolio/holdings_g8.json：best_addable、best_watch、benchmarks；持股 ≥10 檔另比 weakest",
+   "self_adjusted": "數字或 null（本標的：業主盈餘殖利率＋保守 g0，乘等級係數）",
+   "best_holding": "字串或 null（代號；無可加碼持股時 null）",
+   "best_holding_adjusted": "數字或 null",
+   "weakest_holding_adjusted": "數字或 null（持股 <10 檔時 null）",
+   "best_watch": "字串或 null（觀察名單今天可買者代號；無則 null）",
+   "best_watch_adjusted": "數字或 null",
+   "treasury": "數字或 null（照抄 benchmarks.treasury.adjusted）",
+   "market": "數字或 null（照抄 benchmarks.market.adjusted）",
+   "winner": "本標的 | 加碼持股 | 國庫券 | 大盤 | 觀察名單次佳 | 未比較"
+  },
   "files": [
    "cap_input.json",
    "report.md",
