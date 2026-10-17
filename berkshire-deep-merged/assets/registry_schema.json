@@ -1,0 +1,31 @@
+{
+ "_說明": "深度分析登錄表（state/registry.json）。每次深度分析或複查結束時由外部框架依分析輸出回寫該檔一列；review_due.py 據此判斷兩週檢查時要不要重新分析。數字一律每股、與報價同幣別同拆股基準。",
+ "schema": "berkshire-deep-merged/registry-v1",
+ "entries": [
+  {
+   "ticker": "代號",
+   "cik": "SEC CIK（10 碼或數字）",
+   "status": "HOLDING | WATCH | MISSING_DATA | TOO_HARD | REJECT | NO_ACTION",
+   "grade": "A | B | C | D | null（未評到等級）",
+   "last_review_date": "YYYY-MM-DD（任何層級的最近一次分析）",
+   "last_full_review_date": "YYYY-MM-DD（最近一次 G0–G11 完整分析）",
+   "review_price": "上次分析時的價格",
+   "t30_at_valuation": "上次估值所用 30 年期殖利率（小數）",
+   "auto_buy_cap": "min(P2′, IV_base)；WATCH／HOLDING 必填",
+   "sell_review_above": "IV_base",
+   "absurd_price_line": "50 × 正常化每股盈餘 E",
+   "cost": "HOLDING：平均成本",
+   "first_buy_date": "HOLDING：首次建倉日 YYYY-MM-DD（建倉未滿一年不因價格因素賣出，SKILL §6）",
+   "weight": "HOLDING：目前市值權重（小數）",
+   "target_weight": "HOLDING：目標權重（小數）",
+   "thesis_file": "state/theses/代號_YYYY-MM-DD.md（凍結，只能增補）",
+   "kill_criteria_due": [
+    {
+     "text": "失效條件原文",
+     "due": "YYYY-MM-DD（到期必檢）"
+    }
+   ],
+   "next_full_review_due": "YYYY-MM-DD（預設：下一份年報申報後，至遲 12 個月）"
+  }
+ ]
+}

@@ -1,0 +1,71 @@
+===== probe_bugs.py =====
+
+[BUG] 未成交的加碼批次仍被扣掉（批次在下單時扣、不是成交時扣）
+    下單 30 股 @ 55.05，隔日開盤 58 高於限價 → 0 成交；tranches_left 由 3 → 2，持股仍 100 股。該批額度永久消失（21 日窗口內不會重試），最終部位永遠達不到目標權重。
+
+[BUG] 同一天有兩種公司行動時，第二種被靜默丟棄
+    拆股與特別股利同日生效（實務常見）：_ca_exists 只看 (ticker, effective_date)，股利回傳 duplicate，應收股利 0.0。沒有任何異常紀錄，股利永久漏記。
+
+[BUG] 登錄表的 auto_buy_cap／sell_review_above 完全由模型填寫，未被 cap_calc 覆核
+    訊號卡寫 60（已與 cap_calc 對帳），registry_entry.json 寫 180 → 登錄表存 180.0。plan_tranches／review_due.py 用的正是登錄表這個值，等於模型的一個數字錯誤可以讓加碼上限放大 3 倍，而『程式覆核數字』只涵蓋 signal_card.json。registry_entry.json／decision_log.json／thesis.md 都沒有任何結構驗證。
+
+[BUG] 首日缺基準收盤時，帳戶與 SPY 用不同起算日算報酬
+    首日 SPY 收盤缺值 → spy_index 從第 2 天才 =1.0，第 1 天 +10% 的帳戶報酬沒有任何 SPY 對照。帳戶 +12.00%（3 天）、SPY +2.00%（2 天），excess_pp=10.0。summary 直接相減兩個不同期間的指數，超額報酬（小儀表板主數字）會失真；而且只在『首日剛好缺價』時發生，最難察覺。
+
+[BUG] 價格隔離只擋『沙箱以外』，沒擋『同一個沙箱根目錄裡的舊沙箱』
+    deny 規則共 30 條，涵蓋家目錄、/private、/tmp、專案根、state；但沙箱根 /Users/Shared/berkshire-sandbox-zongen 本身不在名單內。目前磁碟上仍有 3 個 *_price.json（例：OTIS_price.json 在 _FULL_B_1/），任何 cwd 在同一根目錄下的 DOSSIER／FULL_A 只要 Read 相對路徑 ../../analyze-2026-10-16/OTIS/_FULL_B_1/dossier/OTIS_price.json 就拿到價格。舊沙箱從不清除（66 MB 累積）。
+
+[BUG] 閘門 3 的價格隔離檢查是模型自述，不是框架事實
+    gate3_check 只讀 answers.json 裡模型自己填的 price_seen_before_answering 與 price_file_opened_at；框架在 open_price_file() 寫下的真實開檔時間（沙箱內 price_file_opened_at.txt）從來沒有被比對過。模型只要填 false＋空字串就通過——而 FULL_A 本來就有 Read 權限，配合 E 的沙箱殘留可直接讀到價格。閘門 3 的 price isolation 條款形同虛設。
+
+[BUG] C／D 級不得買，但框架層的閘門降級不看等級
+    cap_signal_by_gates 只檢查 gate3 與初篩刪除；certainty_grade=C 的 BUY 仍會進 RED_TEAM、仍會寫進 decisions（signal=BUY）。目前只靠 sizing.target_weight 的 GRADE_CAP.get('C',0)=0 在最後一刻變成 0 股來擋——那是『剛好』而不是設計。另外 cap_calc 的等級係數只影響 P1（報告欄），A 級與 B 級的 auto_buy_cap 完全相同（見 cap_probe）。
+
+[BUG] 人工把持股歸零（公司行動調帳）不會取消未成交買單，隔天又買回來
+    adjust(set_qty=0) 後仍有 open buy QRVO-BUY-20260105-1；次日撮合 10 股 @ 65.065，持股變 10 股。這正是 QRVO 併購歸零的操作路徑：使用者以為已經清掉，程式卻用舊限價單重建部位。
+
+[BUG] P2′（隱含成長 10% 上限）對多數公司不生效，真正的上限是 IV_base
+    成長 0–15% 掃描：g=0% P2′=101.1 IV_base=59.1；g=1% P2′=101.1 IV_base=63.5；g=2% P2′=101.1 IV_base=68.4；g=3% P2′=101.1 IV_base=73.6；g=4% P2′=101.1 IV_base=79.2；g=5% P2′=101.1 IV_base=82.5；g=6% P2′=101.1 IV_base=86.0；g=7% P2′=101.1 IV_base=89.5；g=8% P2′=101.1 IV_base=93.2；g=9% P2′=101.1 IV_base=97.1；g=10% P2′=101.1 IV_base=101.1；g=12% P2′=101.1 IV_base=101.1；g=15% P2′=101.1 IV_base=101.1。P2′ 只在歷史成長 ≥10% 時才是上限（3/13）。SKILL §3 把上限寫成 min(P2′, IV_base)，實務上等於只用 IV_base（歷史成長折現），『隱含成長不得超過 10%』這道閘門對典型的 3–6% 成長股完全沒有作用。
+
+[BUG] MATERIAL_8K 把 8-K 5.02（董事／高階經理人異動）當成「重大」→ 直接排 opus 完整分析
+    一次例行的 CFO 退休公告 → action=FULL（['[FULL] 8-K（2026-10-01）：董事或高階經理人異動']）。大型股每年 5.02 申報很常見，每命中一次就是一次 opus FULL_A（實測 $1–2、需人工同意），且會把整條 DOSSIER→FULL_A→FULL_B 重跑。真正的重大性判斷（是否動搖論點）被跳過，交給最貴的模型從頭做一次。
+
+==== 合計 10 項 BUG／10 項探針 ====
+（暫存 state 在 /Users/zongen/Downloads/claude code/berkshire/bug report/deepseek1m/tmp/probe-pf_ag3on ，可整個刪除）
+
+===== verify_issues.py =====
+
+[CONFIRMED] 同一輪的賣出＋買進，成交結果取決於代號字母順序
+    現金 500、賣 10 股可得 1000、買 10 股需 1000。{'買AAA/賣ZZZ': {'AAA': 5, 'ZZZ': 10}, '買ZZZ/賣AAA': {'AAA': 10, 'ZZZ': 10}}。match_orders 依 (created_date, order_id) 排序，order_id 以代號開頭 → 買單先撮就現金不足、只成交部分且訂單被標成 filled，剩餘股數永久丟失；賣單先撮則完全成交。這讓「換股」變成碰運氣，且沒有任何重試。
+
+[CONFIRMED] FULL_B 拿到的 portfolio_state 缺現金／檔數
+    有持股時回傳 {'holdings': [{'ticker': 'KO', 'qty': 100, 'avg_cost': 50.0}], 'note': '持股取自帳本 positions 表'}；缺 ['cash', 'n_holdings', 'committed', 'weights']。SKILL §0 要求「持股、現金、下限、已承諾、檔數」。（無持股時反而有 cash，行為不一致。）
+
+[CONFIRMED] first_tranche_pct_of_target=0 被當成 50
+    模型若填 0（意圖＝不建倉），`or 50` 會把它變成 50%。實測 pct=50。（實務上模型不會填 0，屬邊界 bug，非主要風險。）
+
+[CONFIRMED] triage 只保留最後 20 筆，其餘靜默丟棄
+    25 筆事件 → 只剩 20 筆；`review_due.py:131` 直接截斷，沒有註記。（影響有限：20 筆以上很少見。）
+
+[REFUTED] 30 年期殖利率 1%–7% 對買價無影響，且低利率時買價更低
+    auto_buy_cap：{'1%': 82.51, '3%': 82.51, '5%': 82.51, '7%': 82.51, '9%': 63.76}。1%–7% 完全相同=True；1% 的上限低於 5%=False。（10% 下限是 SKILL 的保守設計，但 g_term=min(3%,L−1%) 造成方向顛倒，這部分是實作錯誤。）
+
+[OVERSTATED] 「等級不影響買價」——正確，但我原本說成 bug
+    auto_buy_cap A/B/C={'A': 82.51, 'B': 82.51, 'C': 82.51}；P1 分別為 {'A': 54.92, 'B': 48.46, 'C': 25.85}。SKILL §3 本來就把等級係數定義在 P1（安全邊際欄與 G8），不進硬上限——所以這是**設計如此**，不是實作 bug。我原本寫「安全邊際在實作上不存在」是誇大：安全邊際改由部位大小（A 15%／B 10%）與 G8 體現。
+
+[CONFIRMED] 同日第二種公司行動被靜默丟棄
+    回傳 duplicate，應收股利 0.0，異常筆數 0。（頻率低但後果是帳本永久少一筆，且事後查不到。）
+
+[REFUTED] 「基準股利在補跑時重複計入」——我寫錯了
+    bench_div 是每次執行重新加總（冪等），重跑 3 次仍為 1.5；nav_daily 是 upsert。原報告 P3-5 撤回。
+
+[OVERSTATED] 「adjust 入金被算成報酬」——是文件明示的設計，不該列為 bug
+    帳戶指數 +50.0%（注資 5 萬被視為損益）。metrics.py 開頭明寫「adjust 視為帳戶內損益」，所以這是刻意的口徑，不是實作錯誤。原報告 P3-10 撤回，改列為「口徑提醒」。
+
+[CONFIRMED] 觸發檢查路徑的 gate1 只看舊訊號卡的 screen_decision
+    review.py 傳的 screen_context 沒有 screen_decision → 退回訊號卡的值；若訊號卡也沒有，gate1 直接 True。初篩事後把某檔改判刪除時，這個路徑不會知道。（影響小：初篩刪除類本來就不會進 registry 的 WATCH。）
+
+==== 統計 ====
+CONFIRMED: 6
+OVERSTATED: 2
+REFUTED: 2

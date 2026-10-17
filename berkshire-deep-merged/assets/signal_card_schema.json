@@ -1,0 +1,129 @@
+{
+ "_說明": "深度分析訊號卡。一致性約束見 SKILL.md 第 4 節。sell_review_above＝IV_base（只觸發賣出檢視）；absurd_price_line＝50×E（至少賣一半）；auto_buy_cap＝min(P2′, IV_base)；screen_context 只供追溯。",
+ "schema": "berkshire-deep-merged/signal-v1",
+ "stop_mode": "A_THESIS_CHECK",
+ "as_of": "YYYY-MM-DD HH:MM 時區",
+ "mode": "HOST",
+ "capital_scale": "SMALL | MID | LARGE",
+ "ticker": "",
+ "conclusion": "買 | 觀察 | 觀察（缺資料） | 不買",
+ "signal": "BUY | WATCH | NO_ACTION",
+ "reason_code": "PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT | NOT_THIS_SKILL",
+ "stopped_at_gate": "STEP0 | G0..G11 | null",
+ "rule_ids": [],
+ "thesis_id": "",
+ "one_liner": "",
+ "certainty_grade": "A | B | C | D | null（未評到等級的停止填 null）",
+ "downgrades": [],
+ "value_per_share": {
+  "conservative": null,
+  "base": null,
+  "optimistic": null,
+  "zero_growth_IV0": null
+ },
+ "r_d": null,
+ "long_rate": {
+  "tenor": "30Y",
+  "value": null,
+  "date": ""
+ },
+ "buy_price_cap": null,
+ "auto_buy_cap": null,
+ "cap_components": {
+  "P2_prime_g_impl_10": null,
+  "P4_prime": null,
+  "P1_report_only": null,
+  "P3_report_only": null
+ },
+ "conclusion_test": {
+  "applied": false,
+  "cap_oe_x0_9": null,
+  "cap_rate_sensitivity": null
+ },
+ "warnings": {
+  "W_LOSS": false,
+  "W_REV": false,
+  "W_PE": false
+ },
+ "earnings_basis": "OPERATING",
+ "population_file": "",
+ "price": null,
+ "price_date": "",
+ "price_to_conservative": null,
+ "price_to_cap": null,
+ "implied_growth": null,
+ "target_weight_pct": null,
+ "max_weight_pct": {
+  "tail": null,
+  "grade": null,
+  "host": null,
+  "correlated_group": null,
+  "single_event": null
+ },
+ "first_tranche_pct_of_target": null,
+ "build_window_days": null,
+ "execution": {
+  "order_type": "LIMIT",
+  "limit_at_or_below": null,
+  "cooling_off_one_cycle": false,
+  "avoid_open_close": true
+ },
+ "failure_conditions": [],
+ "sell_review_above": null,
+ "review_trigger": {
+  "cost_drawdown_pct": -12,
+  "single_day_move_pct": 4,
+  "quarter_drawdown_pct": -25,
+  "failure_condition": true,
+  "filings": true
+ },
+ "bias_count": {
+  "pro_trade": 0,
+  "pro_sell_or_wait": 0
+ },
+ "red_light": false,
+ "delay_one_cycle": false,
+ "inferred_thresholds_used": [],
+ "x98_clauses_used": [],
+ "missing_data": [],
+ "screen_context": {},
+ "next_review": "",
+ "ledger": "COMMISSION | OMISSION_CANDIDATE | NONE",
+ "confidence": "高 | 中 | 低",
+ "screen_decision": "PASS | PASS-困境 | PASS-資料不足（初篩判定；只供追溯）",
+ "distress_check": {
+  "required_if": "screen_decision == PASS-困境 或重大壞消息",
+  "q1_core_advantage_intact": "true|false + 證據",
+  "q2_localized_excisable": "true|false|turnaround",
+  "q3_survives_stress": "true|false + 壓力情境",
+  "q4_who_operates": "",
+  "q5_reason_without_price_drop": "true|false",
+  "result": "PASS_ALL | DOWNGRADE | TURNAROUND_REJECT",
+  "earnings_normalization": "5y_median | 5y_mean"
+ },
+ "earnings_stability_roe_sd5": null,
+ "schema_version_note": "merged-v1",
+ "auto_buy_gates": {
+  "gate1_not_deleted": null,
+  "gate2_price_below_cap": null,
+  "gate3_questionnaire_pass": null,
+  "gate3_answers_file": "",
+  "gate3_failures": [],
+  "fy_last_filed": "YYYY-MM-DD（須早於 as_of）"
+ },
+ "position_plan": {
+  "target_weight_pct": null,
+  "first_tranche_pct_of_target": 50,
+  "add_requires": [
+   "thesis_check_intact",
+   "three_gates_repassed",
+   "price_below_cap",
+   "weight_le_15pct"
+  ]
+ },
+ "decision_log_id": "",
+ "screen_flag_codes": [],
+ "absurd_price_line": null,
+ "absurd_pe_line": 50,
+ "g_impl_gt_cap": null
+}

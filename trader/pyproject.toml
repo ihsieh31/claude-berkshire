@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "berkshire-trader"
+version = "0.1.0"
+description = "波克夏式長期選股：排程、資料、模型工作引擎、紙上帳本（見 ../plan.md）"
+requires-python = ">=3.11"
+dependencies = ["pyyaml", "httpx", "pandas", "jsonschema", "fastapi", "uvicorn", "openpyxl", "tabulate", "numpy"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+trader = "trader.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["trader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,35 @@
+# 金鑰：只放範本 trader/.env.example
+.env
+*.env
+!.env.example
+
+# 執行期資料（資料庫、快取、分析結果、價格）：換機程序見 換機匯出與封存程序.md
+state/
+state_new/
+state_*/
+export_state/
+berkshire_state_*.tar.gz
+berkshire_state_*.sha256
+*.db
+*.db-shm
+*.db-wal
+*.db.bak-*
+
+# 開發期測試分析（含假價格；之後封存為樣本）
+test_runs/
+
+# 審查前的程式備份（git 歷史已取代）
+bug report/**/backup_before_fix*/
+
+# 個人工具設定與記憶
+.claude/
+.workbuddy-ai/
+
+# 編譯產物與快取
+trader/desktop/BerkshireWidget/build/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+.DS_Store

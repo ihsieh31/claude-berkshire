@@ -1,0 +1,6 @@
+{
+  "_說明": "公司改組／重組後 SEC 給新 CIK，歷史財報留在舊 CIK。key 為現行（新）CIK 10 碼，value 為前身（舊）CIK 10 碼清單。新增前必須實測確認承繼關係（舊 CIK 的 submissions name 與新 CIK 的 8-K12B 或 formerNames／說明可證實）。XOM：2026-07-01 Exxon Mobil Corporation 經 Redomiciliation Merger 後，ExxonMobil Holdings Corporation 依 Rule 12g-3(a) 成為承繼發行人（新 CIK 8-K12B 2026-07-01 原文明載；舊 CIK 25-NSE 2026-07-02）。使用者可於 SecClient(predecessors_path=...) 指定覆寫檔，同鍵整個清單取代。",
+  "map": {
+    "0002115436": ["0000034088"]
+  }
+}

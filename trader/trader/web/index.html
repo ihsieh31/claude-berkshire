@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="dashboard-token" content="{{DASHBOARD_TOKEN}}">
+<meta name="color-scheme" content="light dark">
+<title>波克夏紙上交易</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+  <div class="brand">Berkshire<small>紙上交易</small></div>
+  <nav>
+    <a href="#overview">總覽</a><a href="#holdings">持股</a><a href="#trades">交易紀錄</a><a href="#analyses">分析紀錄</a>
+    <a href="#approvals">待同意</a><a href="#anomalies">異常</a>
+  </nav>
+  <div class="top-right"><span id="asof" class="tnum"></span><span class="sep"></span>
+    <button class="btn ghost sm" id="t-colors" title="切換漲跌色"></button>
+    <button class="btn ghost sm" id="t-theme" title="切換主題"></button><span class="sep"></span>
+    <a class="btn ghost sm" href="/api/export/all.xlsx">XLSX</a><a class="btn ghost sm" href="/api/export/all.json">JSON</a></div>
+</div></header>
+<main id="view"><div class="empty">載入中…</div></main>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer"></aside>
+<div class="dialog" id="dialog" role="dialog"></div>
+<div class="quote" id="quote" role="dialog" aria-modal="true"></div>
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

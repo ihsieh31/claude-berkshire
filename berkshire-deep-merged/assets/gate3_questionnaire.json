@@ -1,0 +1,200 @@
+{
+ "_說明": "閘門 3：能力圈與護城河固定問卷。題目、選項與通過條件固定，不得增刪改；每題必須記錄 answer、reason（一到三句）、evidence（至少一筆：來源＋日期，日期須早於決策日）。由 scripts/gate3_check.py 驗證。題目全部取自既有規則（規則書 P-01、SEL-051、SEL-055、SEL-061～066；references/procedure/01_competence_moat.md），不是新門檻。 每題都可答「不知道」（缺資料或看不懂），一律不通過。作答檔另須記錄 answered_at 與 price_file_opened_at（第一次開啟價格檔的時間，必須晚於 answered_at）。",
+ "schema": "berkshire-deep-merged/gate3-v1",
+ "version": "2",
+ "questions": [
+  {
+   "id": "C1",
+   "section": "能力圈",
+   "text": "能寫出這家公司 10 年經濟輪廓的區間嗎（營收結構、資本需求、競爭地位的範圍與主要未知）？",
+   "answer_type": "enum",
+   "choices": [
+    "10年寫得出",
+    "5到10年且10年方向寫得出",
+    "寫不到5年"
+   ],
+   "pass_if": [
+    "10年寫得出",
+    "5到10年且10年方向寫得出"
+   ],
+   "rule": "P-01；references/procedure/01_competence_moat.md §1"
+  },
+  {
+   "id": "C2",
+   "section": "能力圈",
+   "text": "理由測試：能用一句話寫出它為什麼賺錢嗎？",
+   "answer_type": "enum",
+   "pass_if": [
+    "是"
+   ],
+   "rule": "P-01 書面三測",
+   "choices": [
+    "是",
+    "否",
+    "不知道"
+   ]
+  },
+  {
+   "id": "C3",
+   "section": "能力圈",
+   "text": "反方測試：能把空方論點寫得比空方好嗎（附在 reason）？",
+   "answer_type": "enum",
+   "pass_if": [
+    "是"
+   ],
+   "rule": "P-01 書面三測",
+   "choices": [
+    "是",
+    "否",
+    "不知道"
+   ]
+  },
+  {
+   "id": "C4",
+   "section": "能力圈",
+   "text": "邊界測試：已列出不知道的事，且這些未知不決定成敗嗎？",
+   "answer_type": "enum",
+   "pass_if": [
+    "是"
+   ],
+   "rule": "P-01 書面三測",
+   "choices": [
+    "是",
+    "否",
+    "不知道"
+   ]
+  },
+  {
+   "id": "C5",
+   "section": "能力圈",
+   "text": "屬於預設太難類嗎（快速持續變動、無獲利紀錄、取決於技術路線或政治結果）？若是，SEL-051 加嚴條件是否全部成立？",
+   "answer_type": "enum",
+   "choices": [
+    "不屬於",
+    "屬於且加嚴條件全部成立",
+    "屬於且加嚴條件未全部成立"
+   ],
+   "pass_if": [
+    "不屬於",
+    "屬於且加嚴條件全部成立"
+   ],
+   "rule": "SEL-051"
+  },
+  {
+   "id": "M1",
+   "section": "護城河",
+   "text": "定價權：不必猶豫就能漲價，漲價後銷量與留存沒有明顯下滑？",
+   "answer_type": "enum",
+   "choices": [
+    "強",
+    "弱",
+    "不知道"
+   ],
+   "pass_if": [
+    "強",
+    "弱"
+   ],
+   "counts_strong": "強",
+   "rule": "SEL-061～066；references/procedure/01_competence_moat.md §4"
+  },
+  {
+   "id": "M2",
+   "section": "護城河",
+   "text": "攻擊／複製：給對手充足資本與人才也傷不了？（評強須經歷過至少一次壓力事件後使用量與留存未明顯下降）",
+   "answer_type": "enum",
+   "choices": [
+    "強",
+    "弱",
+    "不知道"
+   ],
+   "pass_if": [
+    "強",
+    "弱"
+   ],
+   "counts_strong": "強",
+   "rule": "SEL-061～066"
+  },
+  {
+   "id": "M3",
+   "section": "護城河",
+   "text": "砍價：對手砍價一半也搶不到客戶？",
+   "answer_type": "enum",
+   "choices": [
+    "強",
+    "弱",
+    "不知道"
+   ],
+   "pass_if": [
+    "強",
+    "弱"
+   ],
+   "counts_strong": "強",
+   "rule": "SEL-061～066"
+  },
+  {
+   "id": "M4",
+   "section": "護城河",
+   "text": "說得出至少一項護城河來源並說明為何持久嗎（不是需要持續重建的優勢）？",
+   "answer_type": "enum",
+   "pass_if": [
+    "是"
+   ],
+   "rule": "SEL-061～063",
+   "choices": [
+    "是",
+    "否",
+    "不知道"
+   ]
+  },
+  {
+   "id": "M5",
+   "section": "護城河",
+   "text": "護城河方向？（分不清結構性或週期性 → 當作變窄）",
+   "answer_type": "enum",
+   "choices": [
+    "變寬",
+    "持平",
+    "變窄"
+   ],
+   "pass_if": [
+    "變寬",
+    "持平"
+   ],
+   "rule": "SEL-064"
+  },
+  {
+   "id": "M6",
+   "section": "經濟特性",
+   "text": "四型分類（稅後無槓桿有形資本報酬）？",
+   "answer_type": "enum",
+   "choices": [
+    "偉大＋",
+    "偉大",
+    "良好",
+    "可怕"
+   ],
+   "pass_if": [
+    "偉大＋",
+    "偉大",
+    "良好"
+   ],
+   "rule": "SEL-055；references/procedure/01_competence_moat.md §3"
+  }
+ ],
+ "pass_rule": {
+  "all_answered_with_reason_and_evidence": true,
+  "every_answer_in_pass_if": true,
+  "min_strong_among": {
+   "ids": [
+    "M1",
+    "M2",
+    "M3"
+   ],
+   "min": 2,
+   "rule": "護城河核心三測至少兩項為強（references/01_competence_moat.md §4）"
+  },
+  "price_seen_before_answering": false,
+  "evidence_dates_before_decision_date": true
+ },
+ "grade_link": "C1＝10年寫得出 才可 A；5到10年 最高 B（P-01）。M6＝良好 → 降一級（SEL-055）。問卷通過不提高等級（規則書 第 0 節第 9 點）。"
+}

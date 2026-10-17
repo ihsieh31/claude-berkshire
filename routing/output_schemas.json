@@ -1,0 +1,200 @@
+{
+ "_說明": "各工作的機器可讀輸出格式。模型輸出必須是單一 JSON 物件（另有指定檔案者除外）；框架以此驗證，不合格依 model_routing.json defaults.on_invalid_output 處理。列舉值必須完全相同。",
+ "DOSSIER": {
+  "ticker": "代號",
+  "decision_date": "YYYY-MM-DD",
+  "sections_appended": [
+   "業務 | 分部 | 風險因素 | 管理層討論 | 債務到期表 | 利息費用 | 或有負債與訴訟 | 會計師關鍵查核事項 | 委託書薪酬 | 重大 8-K | 最近一季 10-Q | 附註摘要 | 競爭與產業關鍵指標"
+  ],
+  "dq_checks": [
+   {
+    "warning": "build_dossier 列出的警示原文",
+    "result": "已核對：原因… | 數字有誤：正確值…（來源） | 無法核對"
+   }
+  ],
+  "missing": [
+   "缺的必要項（依 procedure/08 表）"
+  ],
+  "contains_price": false
+ },
+ "TRIAGE": {
+  "ticker": "代號",
+  "items": [
+   {
+    "ref": "8-K 日期與項目碼，或新聞日期＋標題",
+    "answer": "是 | 否 | 不確定",
+    "touches": "受影響的論點句或失效條件原文；否 → 空字串",
+    "reason": "一句話"
+   }
+  ],
+  "escalate": "true | false（任一項 是／不確定 → true）"
+ },
+ "PRICE": {
+  "ticker": "代號",
+  "price": 0.0,
+  "auto_buy_cap": "數字或 null（照抄 cap_calc）",
+  "sell_review_above": "數字或 null",
+  "absurd_price_line": "數字或 null",
+  "gates": {
+   "gate1_screen": "通過 | 不通過",
+   "gate2_price_lt_cap": "通過 | 不通過 | 無上限",
+   "gate3_on_file": "通過 | 不通過 | 已過期"
+  },
+  "proposed_action": "BUY_CANDIDATE | HOLD | SELL_REVIEW | SELL_HALF | NO_CHANGE",
+  "needs_full": "true | false",
+  "reason": "一到三句；只用 cap_calc 數字與登錄表事實"
+ },
+ "THESIS": {
+  "ticker": "代號",
+  "verdict": "完好 | 疑似 | 證偽",
+  "kill_criteria_status": [
+   {
+    "criterion": "失效條件原文",
+    "status": "未觸發 | 接近 | 已觸發 | 無資料",
+    "evidence": "文件、節、申報日、數字"
+   }
+  ],
+  "r_list_status": [
+   {
+    "item": "R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10",
+    "status": "無變化 | 改善 | 惡化 | 無資料 | 不在本工作範圍",
+    "evidence": "文件、節、申報日、數字；無資料或不在範圍時寫原因"
+   }
+  ],
+  "new_facts": [
+   "上次分析後、與論點有關的新事實（來源＋日期）"
+  ],
+  "reason": "一到三句"
+ },
+ "FULL_A": {
+  "ticker": "代號",
+  "decision_date": "YYYY-MM-DD",
+  "stopped": "true | false",
+  "stopped_at_gate": "STEP0 | G0 | G1 | G2 | G3 | 4A | G4 | G5 | G6 | null",
+  "reason_code": "MISSING_DATA | TOO_HARD | REJECT | NOT_THIS_SKILL | null",
+  "asset_class": "非金融 | 銀行 | 保險 | 其他金融",
+  "starting_grade": "A | B | null（由 G1）",
+  "downgrades": [
+   {
+    "step": "G3",
+    "rule": "規則編號",
+    "reason": "一句"
+   }
+  ],
+  "moat_tests": {
+   "pricing_power": "強 | 中 | 弱",
+   "attack_copy": "強 | 中 | 弱",
+   "price_cut": "強 | 中 | 弱"
+  },
+  "moat_evidence": {
+   "pricing_power": "足夠 | 缺資料 | null（未走到 G3 護城河時 null）",
+   "attack_copy": "足夠 | 缺資料 | null",
+   "price_cut": "足夠 | 缺資料 | null"
+  },
+  "red_flags": {
+   "exclusion": 0,
+   "warning": 0
+  },
+  "capital_allocation_net": 0,
+  "tail_loss_after_tax_pct": "數字或 null",
+  "normalized_inputs": {
+   "oe_per_share": "數字或 null",
+   "g10": "數字或 null",
+   "g5": "數字或 null",
+   "excluded_shock_years": [],
+   "roe_std_ex_shock_pp": "數字或 null"
+  },
+  "thesis_draft": {
+   "one_liner": "",
+   "key_assumptions": [
+    "3–5 個關鍵假設（每條可被事實否定；SELL-011 R1 逐季對照）"
+   ],
+   "kill_criteria": [
+    {
+     "text": "可觀察、有期限",
+     "due": "YYYY-MM-DD"
+    }
+   ]
+  },
+  "missing": [],
+  "inferred_thresholds_used": [],
+  "files": [
+   "report_A.md",
+   "gate3_answers.json"
+  ]
+ },
+ "FULL_B": {
+  "_說明": "訊號卡依 berkshire-deep-merged/assets/signal_card_schema.json；登錄表依 registry_schema.json；日誌依 decision_log_schema.json；本物件為摘要",
+  "ticker": "代號",
+  "decision_id": "{ticker}-{YYYYMMDD}-{n}",
+  "signal": "BUY | WATCH | NO_ACTION",
+  "reason_code": "PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT",
+  "stopped_at_gate": "G7..G11 | null",
+  "certainty_grade": "A | B | C | D | null",
+  "auto_buy_cap": "數字或 null",
+  "target_weight": "小數或 0",
+  "first_tranche_weight": "小數或 0",
+  "files": [
+   "cap_input.json",
+   "report.md",
+   "signal_card.json",
+   "registry_entry.json",
+   "decision_log.json",
+   "thesis.md"
+  ]
+ },
+ "RED_TEAM": {
+  "ticker": "代號",
+  "fatal": "true | false",
+  "fatal_paths": [
+   {
+    "path": "10 年內永久虧大錢的具體路徑",
+    "probability_note": "依據",
+    "covered_by_kill_criteria": "true | false"
+   }
+  ],
+  "number_errors": [
+   {
+    "where": "報告段落",
+    "claimed": "",
+    "correct": "",
+    "source": ""
+   }
+  ],
+  "rule_violations": [
+   "違反 SKILL 鐵律或步驟的地方（例如用價格作答 G1–G6、補假設值、用預測估值）"
+  ],
+  "verdict": "維持 | 退回"
+ },
+ "CORP_ACTION": {
+  "ticker": "代號",
+  "action_type": "無公司行動 | 拆股 | 合股 | 現金股利 | 股票股利 | 分拆 | 併購換股 | 代號變更 | 其他",
+  "effective_date": "YYYY-MM-DD 或 null（除權／生效日；只有「無公司行動」可為 null）",
+  "pay_date": "YYYY-MM-DD 或 null（股利發放日）",
+  "ratio_new_per_old": "數字或 null（每 1 股舊股換得新股數；1 拆 4＝4，10 合 1＝0.1）",
+  "cash_per_share": "數字或 null（現金股利或現金對價，每舊股）",
+  "fractional_handling": "現金了結 | 無條件捨去 | 不適用 | 不明",
+  "new_ticker": "字串或 null",
+  "needs_human": "true | false（分拆、併購換股、資訊矛盾或不明 → true）",
+  "evidence": "引用的原文句子與來源",
+  "reason": "一句話"
+ },
+ "HOLD_REVIEW": {
+  "ticker": "代號",
+  "decision_date": "YYYY-MM-DD",
+  "path": [
+   {
+    "q": "Q0 | Q1 | Q1b | Q2 | Q3 | Q3a | Q3b | Q3c | Q3d | Q4 | Q5 | Q6",
+    "answer": "是 | 否 | 不適用",
+    "evidence": "規則編號、文件、節、日期、數字"
+   }
+  ],
+  "action": "HOLD | TRIM | SELL_ALL",
+  "sell_category": "業務 | 估值 | 估值＋業務 | 制度 | 事件 | SWITCH | FUNDING | null",
+  "trim_fraction": "數字或 null（TRIM 時為賣出比例 0–1）",
+  "stop_adding": "true | false",
+  "observe_until": "YYYY-MM-DD 或 null（P-50 觀察期限）",
+  "falsified_assumption": "字串或 null（被否定的關鍵假設與否定它的事實）",
+  "reason": "一到三句"
+ }
+}

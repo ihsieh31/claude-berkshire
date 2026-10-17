@@ -1,0 +1,10 @@
+# 類別比例表：ratio＝該類別每股相當於幾股「交易類別」；無經濟權益＝0。member 為 XBRL StatementClassOfStockAxis 成員本地名。
+# 只用於 EPS 比例無法自動換算者；每列須有申報原文佐證。出現表外的新類別 → 不換算（資料不足）。
+ticker,member,ratio,evidence
+STZ,CommonClassAMember,1,"交易類別（10-K 2026-04-22 封面：Class A Common Stock）"
+STZ,ConvertibleCommonStockMember,1,"10-K 2026-04-22 Note：Class 1 Stock convertible into Class A Stock on a one-to-one basis"
+ARES,CommonClassAMember,1,"交易類別（10-K 2026-02-25 封面：Class A common stock，ARES）"
+ARES,NonvotingCommonStockMember,1,"10-K 2026-02-25：dividends paid to holders of our Class A and non-voting common stock（同等經濟權益）"
+ARES,CommonClassBMember,0,"10-K 2026-02-25：Class B 僅表決權（votes tied to Ares Ownership Condition），股利只發給 Class A 與 non-voting"
+ARES,CommonClassCMember,0,"10-K 2026-02-25：Class C 表決權數等於他人持有的 AOG Units；經濟權益在 AOG Units（非控制權益，不在歸屬母公司淨利內）"
+ARES,SeriesBMandatoryConvertiblePreferredStockMember,0,"10-K 2026-02-25：6.75% Series B mandatory convertible preferred（特別股，非普通股權益）"
