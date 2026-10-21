@@ -110,7 +110,10 @@ def test_estimate_ignores_hark_queue_samples(tmp_path):
 
 def test_clean_hark_estimates_tool(tmp_path):
     import importlib.util
-    spec = importlib.util.spec_from_file_location("clean_hark_estimates", REPO / "hark" / "clean_hark_estimates.py")
+    tool = REPO / "hark" / "clean_hark_estimates.py"
+    if not tool.is_file():   # B 機（Hark）專用工具，依使用者 2026-10-18 09:48 決定不進 repo
+        pytest.skip("hark/clean_hark_estimates.py 只在 B 機")
+    spec = importlib.util.spec_from_file_location("clean_hark_estimates", tool)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     p = tmp_path / "copy.db"

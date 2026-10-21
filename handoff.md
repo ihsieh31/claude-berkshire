@@ -6,9 +6,7 @@
 ## 現況
 
 - 程式：main 已含第三輪（A3）全部修復，以及 2026-10-21 合併後的補修（測試環境隔離、A3-M1E-01 SEC 封鎖時初篩失敗、文件鍵名）。
-- 測試：`cd trader && python3 -m pytest -q` → 3205 passed、2 failed、4 skipped（本機 A 機）。2 個失敗是環境差異，不是程式錯：
-  - `test_fix_P35`：需要 B 機專用的 `hark/` 工具（刻意不進 repo）。
-  - `test_fix_RM1_5`：讀本機 `state/` 的凍結 P/E 檔，A 機是 10-16 凍結，測試寫死 B 機的 10-15。
+- 測試：`cd trader && python3 -m pytest -q` → 3204 passed、0 failed、6 skipped（本機 A 機）。skip 的是只在 B 機有意義的測試（`test_fix_P35` 需要 `hark/` 工具、`test_fix_RM1_5` 需要 B 機 2026-10-15 的凍結檔等），缺檔時自動略過。
 - 資料：A 機 `state/` 只有 2026-10-15 的舊樣本（15 筆決策、0 持股、0 委託），schema v2；新程式第一次連線時自動升到 v3（只新增 `decisions.provenance` 欄）。
 - 排程：未安裝（使用者 2026-10-17 指示先不裝）。
 

@@ -3,7 +3,7 @@
 **把波克夏式的長期選股規則，變成可排程、可稽核的紙上交易系統。**
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-3205%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-3204%20passed-brightgreen)
 ![Mode](https://img.shields.io/badge/trading-paper%20only-orange)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
@@ -202,10 +202,7 @@ python3 berkshire-screen-merged/scripts/test_screen.py      # 初篩自測（在
 python3 berkshire-deep-merged/scripts/test_review_due.py    # 觸發檢查自測
 ```
 
-目前結果（2026-10-21，A 機）：3205 passed、2 failed、4 skipped。這 2 個失敗是環境差異造成的：
-
-- `test_fix_P35`：需要 B 機專用的 `hark/` 工具，這個工具刻意不放進 repo。
-- `test_fix_RM1_5`：讀取本機 `state/` 的凍結 P/E 檔，內容跟 B 機不同。
+目前結果（2026-10-21，A 機）：3204 passed、0 failed、6 skipped。skip 的都是只在 B 機（Hark）才有意義的測試，例如需要不進 repo 的 `hark/` 工具，或需要 B 機 `state/` 的凍結檔；缺檔時自動略過。
 
 慣例：
 

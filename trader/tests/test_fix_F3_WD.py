@@ -124,24 +124,15 @@ def test_sellall_pause_docs_consistent():
     assert "SELL_ALL 全清照建委託、撮合時擋" in h and "不要另補賣單" in h
 
 
-def test_handoff_section0_current():
-    """A3-M8B2-08：§0 已覆寫（P55、round3、r3 前置、A 機同步），舊 §0 移到歷史段。
-    2026-10-21 起 handoff.md 只寫現況，A3 當時的全文封存在 docs/archive/。"""
-    h = _doc("docs/archive/handoff-2026-10-21.md")
-    i0 = h.index("## 0. 新 session 從這裡開始")
-    sec0 = h[i0:h.index("## 0-歷史", i0)]
-    assert "2026-10-18 中午覆寫" not in sec0.splitlines()[0]
-    for w in ("P55", "round3", "r3 前置", "A 機同步", "2803 passed"):
-        assert w in sec0, w
-    assert "## 0-歷史（2026-10-18 中午的現況" in h
-
-
-def test_handoff_history_lines_annotated():
-    """A3-M8C2-05：三句歷史文字句尾加註已完成，原文不改寫（封存檔）。"""
-    h = _doc("docs/archive/handoff-2026-10-21.md")
-    assert "目前無程式讀取）。（已由 M8-R4-01" in h
-    assert "相關群上限（P-31／P-32）；（相關群上限已由 P-31／P-32 完成" in h
-    assert "`max_group_weight`）（已由 M8-D10-07 完成" in h
+def test_handoff_current_state_only():
+    """A3-M8B2-08 後續（2026-10-21）：handoff.md 只寫現況，整份覆寫；歷史移到 docs/archive/，不在本檔追加流水帳。"""
+    h = _doc("handoff.md")
+    for sec in ("## 現況", "## 禁止事項", "## 下一步：r3", "## 兩台機器", "## 仍有效的使用者決策",
+                "## 人工操作注意"):
+        assert sec in h, sec
+    assert "docs/archive/" in h
+    for old in ("## 0-歷史", "修復總覽", "§0-歷史"):   # 歷史段不得留在現況檔
+        assert old not in h, old
 
 
 def test_switch_doc_restore_mentions_cap_inputs_theses():
