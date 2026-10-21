@@ -88,4 +88,4 @@ stop_mode：A_THESIS_CHECK（無價格停損、無移動停損）
 
 淘汰類（TOO_HARD／REJECT）只看上表「重大 8-K」；誠信淘汰（NEVER-04 (a)）只看 8-K 5.02；`MISSING_DATA` 只看新年報／新季報（SKILL §7）。P-63 的「無重大新事實」＝上次任何一次分析（登錄表 `last_review_date`，不限完整分析）後沒有上表 FULL／THESIS 類觸發，且 triage 初判全為「否」。
 
-**缺資料持股的重試節流**（設計決策 D74；框架 `trader/pipelines/review.py`，鍵 `missing_data_retry_weeks`）：持股最近一次完整分析以 `MISSING_DATA` 停止（含使用者拒絕強模型、保險／銀行生存類前置檢查不過、輸出不合格；不推進上次完整分析日）後 13 週（91 個曆日）內，上表「完整複查到期」的滿 12 個月、`next_full_review_due`、權重 >25% 以該次嘗試日為基準，不每兩週重排 `FULL`；新年報照常 `FULL`，新季報由 THESIS 升 `FULL`（同 D27）；PRICE、THESIS 其餘觸發照常。滿 13 週後恢復一般判準。
+**缺資料持股的重試節流**（設計決策 D74；框架 `trader/trader/pipelines/review.py`，常數 `MISSING_RETRY_DAYS`＝91 日）：持股最近一次完整分析以 `MISSING_DATA` 停止（含使用者拒絕強模型、保險／銀行生存類前置檢查不過、輸出不合格；不推進上次完整分析日）後 13 週（91 個曆日）內，上表「完整複查到期」的滿 12 個月、`next_full_review_due`、權重 >25% 以該次嘗試日為基準，不每兩週重排 `FULL`；新年報照常 `FULL`，新季報由 THESIS 升 `FULL`（同 D27）；PRICE、THESIS 其餘觸發照常。滿 13 週後恢復一般判準。
