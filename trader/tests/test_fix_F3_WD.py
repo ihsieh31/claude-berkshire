@@ -125,8 +125,9 @@ def test_sellall_pause_docs_consistent():
 
 
 def test_handoff_section0_current():
-    """A3-M8B2-08：§0 已覆寫（P55、round3、r3 前置、A 機同步），舊 §0 移到歷史段。"""
-    h = _doc("handoff.md")
+    """A3-M8B2-08：§0 已覆寫（P55、round3、r3 前置、A 機同步），舊 §0 移到歷史段。
+    2026-10-21 起 handoff.md 只寫現況，A3 當時的全文封存在 docs/archive/。"""
+    h = _doc("docs/archive/handoff-2026-10-21.md")
     i0 = h.index("## 0. 新 session 從這裡開始")
     sec0 = h[i0:h.index("## 0-歷史", i0)]
     assert "2026-10-18 中午覆寫" not in sec0.splitlines()[0]
@@ -136,8 +137,8 @@ def test_handoff_section0_current():
 
 
 def test_handoff_history_lines_annotated():
-    """A3-M8C2-05：三句歷史文字句尾加註已完成，原文不改寫。"""
-    h = _doc("handoff.md")
+    """A3-M8C2-05：三句歷史文字句尾加註已完成，原文不改寫（封存檔）。"""
+    h = _doc("docs/archive/handoff-2026-10-21.md")
     assert "目前無程式讀取）。（已由 M8-R4-01" in h
     assert "相關群上限（P-31／P-32）；（相關群上限已由 P-31／P-32 完成" in h
     assert "`max_group_weight`）（已由 M8-D10-07 完成" in h
