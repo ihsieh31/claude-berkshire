@@ -354,6 +354,8 @@ def run_screen(cfg: Config, paths: Paths, conn, asof: str, top: int = 15, specia
             stale_ratio = summary["fetch"].get("sec_stale_ratio") or 0
             if stale_ratio > MAX_SEC_STALE_RATIO:   # SEC 失敗／封鎖、大量用舊快取：不產出名單，run failed 讓排程重試（A3-M1E-01）
                 raise ScreenError(f"SEC 舊快取比例 {stale_ratio:.1%} > {MAX_SEC_STALE_RATIO:.0%}（SEC 抓取失敗或封鎖），不產出名單")
+            if summary["fetch"].get("sec_blocked"):   # 封鎖中但比例小（封鎖在抓取尾段）：P/E 已不凍結，同樣失敗重試
+                raise ScreenError(f"SEC 封鎖中（舊快取比例 {stale_ratio:.1%}），不產出名單")
         features, prices = inputs_dir / "features.csv", inputs_dir / "prices.csv"
         missing = [p.name for p in (features, prices) if not p.exists()]
         if missing:

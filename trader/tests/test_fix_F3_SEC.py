@@ -165,6 +165,21 @@ def test_m1e01_screen_fails_when_sec_blocked_with_stale_cache(tmp_path, senv, mo
     assert conn.execute("SELECT status FROM runs").fetchone()["status"] == "failed"
 
 
+def test_m1e01_screen_fails_when_sec_blocked_small_stale_ratio(tmp_path, senv, monkeypatch):
+    """封鎖中但舊快取比例 ≤10%（封鎖發生在抓取尾段）：同樣不產出名單、run failed 讓排程重試。"""
+    paths, conn = senv
+
+    def fake_fetch(cfg, paths, conn, asof, inputs_dir, **k):
+        P37._write_inputs(inputs_dir)
+        return {"universe_source": "download", "sec_stale_ratio": 0.05, "sec_blocked": True,
+                "sec_stale_cache": ["CIK0000000001.json"]}
+
+    monkeypatch.setattr(SP, "fetch_inputs", fake_fetch)
+    s = SP.run_screen(None, paths, conn, P37.ASOF)
+    assert "封鎖" in s.get("error", "") and "shortlist" not in s
+    assert conn.execute("SELECT status FROM runs").fetchone()["status"] == "failed"
+
+
 # ============================================================ A3-M2E-01：登錄表日期欄正規化
 def test_m2e01_sanitize_normalizes_dates():
     notes: list[str] = []
