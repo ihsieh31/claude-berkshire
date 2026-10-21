@@ -5,7 +5,7 @@
 
 ## 0. 新 session 從這裡開始：現況（2026-10-21 本次 commit）
 
-**一句話**：第二輪修復已通過 P55 總驗（2026-10-20 04:25）；第三輪全專案審查（round3，A3）的 CONFIRMED 項目**已全部修完並併入本次 commit**，乾淨匯出全套 3195 passed／3 failed（皆為已知）／12 skipped。下一步是 **r3**（15 檔）：名單與 run-id **待使用者決定**，`exclusions.csv`、`universe_override.txt` **待使用者回答**。r3 在 B 機（Hark）跑完、QA 通過後匯出，搬回使用者電腦（A 機）**直接當初始資料**；之後的排程分析一律在 A 機用 `claude_code`。r2 仍只當樣本。
+**一句話**：第二輪修復已通過 P55 總驗（2026-10-20 04:25）；第三輪全專案審查（round3，A3）的 CONFIRMED 項目**已全部修完並併入本次 commit**，乾淨匯出全套 3195 passed／3 failed（皆為已知）／12 skipped。下一步是 **r3**（15 檔）：名單與 run-id **待使用者決定**（`exclusions.csv`、`universe_override.txt` 已答：不用）。r3 在 B 機（Hark）跑完、QA 通過後匯出，搬回使用者電腦（A 機）**直接當初始資料**；之後的排程分析一律在 A 機用 `claude_code`。r2 仍只當樣本。
 
 **禁止（新 session 一定要守，仍有效）**
 - **不要照舊指令重跑、不要覆蓋 r2**：本檔「§0-歷史」與各日期段裡的重跑指令都已過時；不得對現行 `state/` 跑 `trader analyze`／`bootstrap`／`daily`／`run-approved`。r3 的名單、run-id 與指令等使用者決定後才寫進本節。
@@ -22,7 +22,7 @@
 
 **r3 前置（跑 r3 前要完成）**
 1. ~~round3 的 CONFIRMED 全部修完、查核、全套通過~~：已完成（本次 commit）。
-2. `cik_predecessors.json`、`share_class_ratios.csv` 由 Hark 對照 S&P 500／SEC 補齊（使用者 2026-10-20 07:53）；`exclusions.csv`、`universe_override.txt` **待使用者回答**。
+2. `cik_predecessors.json`、`share_class_ratios.csv` 由 Hark 對照 S&P 500／SEC 補齊（使用者 2026-10-20 07:53）；`exclusions.csv`、`universe_override.txt` 已答（使用者 2026-10-21）：A 機 `state/` 沒有這兩個檔，**不建立、不複製**；r3 用完整 S&P 500、不做人工排除（X5 等仍由登錄表自動推得）。
 3. inputs 沒有 `features.csv`：r3 抓資料要加 `--force` 重抓（A3-M1C）。
 4. 名單與 run-id **待使用者決定**。預定沿用 r2 的 15 檔（HIG PHM BBY WTW ULTA SPG HPQ GL FDX ALL UHS DHI LOW CF HON）；定案後寫進本節，並同步改《換機匯出與封存程序.md》§1 第 4 步（現列的是 A 機舊樣本的 15 檔，A3-M8B2-13）。
 
@@ -51,7 +51,7 @@
 
 **交接待辦**
 1. r3 名單與 run-id：待使用者決定（見 r3 前置 4）。
-2. `exclusions.csv`、`universe_override.txt`：待使用者回答。
+2. ~~`exclusions.csv`、`universe_override.txt`：待使用者回答~~：已答（使用者 2026-10-21）：A 機 `state/` 沒有這兩個檔，**不建立、不複製**；r3 用完整 S&P 500、不做人工排除（X5 等仍由登錄表自動推得）。
 3. A3-M8B2-13（換機程序 §1 第 4 步的名單）：r3 名單定案後改。
 4. A 機：套齊修復、確認 M5-D8-01／02 已修；排程仍未安裝（使用者 10-17 指示先不裝）；換機要等 r3。
 
@@ -780,5 +780,5 @@ daily（F3-DY）
 ### 交接待辦
 
 1. r3 名單與 run-id：待使用者決定（預定沿用 r2 的 15 檔）；定案後寫進 §0 並改換機程序 §1 第 4 步。
-2. `exclusions.csv`、`universe_override.txt`：待使用者回答。
+2. ~~`exclusions.csv`、`universe_override.txt`：待使用者回答~~：已答（使用者 2026-10-21）：A 機 `state/` 沒有這兩個檔，**不建立、不複製**；r3 用完整 S&P 500、不做人工排除（X5 等仍由登錄表自動推得）。
 3. A 機同步本次 commit 的修復；A 機實跑前確認 M5-D8-01／02 已修。
