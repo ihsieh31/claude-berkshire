@@ -100,6 +100,8 @@ class TradingCalendar:
             try:
                 rows = client.calendar(start, end)
                 days = [r["date"] for r in rows]
+                if not days:   # 回空清單＝資料來源暫時故障：不可覆寫好的快取（A3-M7C-04）
+                    raise DataError(f"Alpaca 交易日曆 {start}～{end} 回空")
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
                 return cls(days, source="alpaca")

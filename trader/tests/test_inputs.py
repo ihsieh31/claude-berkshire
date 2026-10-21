@@ -47,11 +47,11 @@ def test_fetch_inputs_writes_all_files(tmp_path):
     out = tmp_path / "out"
     s = fetch_inputs(_cfg(tmp_path), paths, conn, "2026-10-16", out, tickers=["brk-b", "KO"], freeze_pe=True,
                      clients={"sec": FakeSec(), "alpaca": FakeAlpaca(), "fred": FakeFred()})
-    for f in ("features.csv", "prices.csv", "daily.csv", "corporate_actions.json", "rates.json"):
+    for f in ("features.csv", "prices.csv", "rates.json"):
         assert (out / f).is_file(), f
+    assert not (out / "daily.csv").exists() and not (out / "corporate_actions.json").exists()   # 無讀者，已刪（M4-R3-01）
     assert list(pd.read_csv(out / "features.csv").ticker) == ["BRK.B", "KO"]
     assert json.loads((out / "rates.json").read_text())["t30"] == 0.047
-    assert "raw" not in json.loads((out / "corporate_actions.json").read_text())[0]
     assert "略過" in s["pe_median"]  # 部分代號不得凍結 P/E 中位
     assert not (paths.cache / "pe_median").exists()
 

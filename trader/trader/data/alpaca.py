@@ -124,6 +124,7 @@ class AlpacaClient:
             min_interval=0.31,
             headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret},
             secrets=[key, secret],
+            follow_redirects=False,  # 金鑰在自訂標頭，httpx 跨網域轉址不會剝除 → 不跟隨，3xx 視為錯誤
         )
 
     # ---- 內部：分頁迭代 ----
@@ -144,7 +145,8 @@ class AlpacaClient:
 
     # ---- 日線 ----
     def bars(self, symbols: list[str], start: str, end: str, adjustment: str = "raw",
-             timeframe: str = "1Day") -> pd.DataFrame:
+             timeframe: str = "1Day", feed: str | None = None) -> pd.DataFrame:
+        """feed 覆寫本次請求的 feed（None＝client 預設；daily 取 ADV 用 data.adv_feed，M4-D7-2）。"""
         syms = [normalize_ticker(s) for s in symbols]
         syms = [s for s in syms if s]
         rows: list[dict] = []
@@ -156,7 +158,7 @@ class AlpacaClient:
                 "start": start,
                 "end": end,
                 "adjustment": adjustment,
-                "feed": self.feed,
+                "feed": feed or self.feed,
                 "limit": 10000,
             }
             for body in self._pages(f"{DATA_URL}/v2/stocks/bars", params):

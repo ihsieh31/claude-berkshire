@@ -35,7 +35,6 @@ GOOD = {
         "sections_appended": ["業務", "風險因素"],
         "dq_checks": [{"warning": "營收與季報不符", "result": "已核對：原因在於匯率換算"}],
         "missing": ["債務到期表"],
-        "contains_price": False,
     },
     "TRIAGE": {
         "ticker": "AAPL",
@@ -51,6 +50,8 @@ GOOD = {
         "gates": {"gate1_screen": "通過", "gate2_price_lt_cap": "無上限", "gate3_on_file": "已過期"},
         "proposed_action": "HOLD",
         "needs_full": False,
+        "g9_contrarian": "反方：成長放緩時現價已不便宜。",
+        "g10_still_valid": True,
         "reason": "價格低於賣出檢視線。",
     },
     "THESIS": {
@@ -59,7 +60,7 @@ GOOD = {
         "kill_criteria_status": [
             {"criterion": "毛利率連續兩季低於 30%", "status": "未觸發", "evidence": "10-Q 2026-01-30 第 2 節"}
         ],
-        "r_list_status": [{"item": "R1", "status": "無變化", "evidence": "測試"}],
+        "r_list_status": [{"item": f"R{i}", "status": "無變化", "evidence": "測試"} for i in range(1, 11)],
         "new_facts": ["新增 8-K（2026-01-05）"],
         "reason": "論點仍成立。",
     },
@@ -71,7 +72,7 @@ GOOD = {
         "reason_code": None,
         "asset_class": "非金融",
         "starting_grade": "A",
-        "downgrades": [{"step": "G3", "rule": "G3-2", "reason": "應收帳款周轉變慢"}],
+        "downgrades": [{"step": "G3", "rule": "G3-2", "driver_id": "營運資本", "reason": "應收帳款周轉變慢"}],
         "moat_tests": {"pricing_power": "強", "attack_copy": "中", "price_cut": "強"},
         "moat_evidence": {"pricing_power": "足夠", "attack_copy": "缺資料", "price_cut": "足夠"},
         "red_flags": {"exclusion": 0, "warning": 1},
@@ -83,11 +84,17 @@ GOOD = {
             "g5": None,
             "excluded_shock_years": [],
             "roe_std_ex_shock_pp": None,
+            "norm_eps": 5.4,   # P20（M2_D4_03）估值欄
+            "roe": 0.3,
+            "eps_cagr5": 0.09,
+            "incr_roic_gt_rd": True,
+            "insurance": {"tbv_ps": None, "float_ps": None, "float_cost": None},
         },
         "thesis_draft": {
             "one_liner": "品牌定價權支撐長期獲利",
             "key_assumptions": ["定價權維持", "通路不被取代", "資本需求低"],
-            "kill_criteria": [{"text": "毛利率連續兩季低於 30%", "due": "2027-01-01"}],
+            "kill_criteria": [{"text": "毛利率連續兩季低於 30%", "due": "2027-01-01"},
+                              {"text": "自由現金流連兩年為負", "due": "2027-12-31"}],
         },
         "missing": [],
         "inferred_thresholds_used": [],
@@ -97,15 +104,18 @@ GOOD = {
         "ticker": "AAPL",
         "decision_id": "AAPL-20260102-1",
         "signal": "WATCH",
-        "reason_code": "TOO_HARD",
+        "reason_code": "PASS_ALL",   # WATCH 只配 PASS_ALL，停止碼只配 NO_ACTION（A3-M3C-07）
         "stopped_at_gate": "G8",
         "certainty_grade": "B",
         "auto_buy_cap": None,
         "target_weight": 0,
         "first_tranche_weight": 0,
+        "intended_weight": {"level": None, "reason": None},
         "g8": {"self_adjusted": 0.061, "best_holding": None, "best_holding_adjusted": None,
                "weakest_holding_adjusted": None, "best_watch": None, "best_watch_adjusted": None,
                "treasury": 0.042, "market": 0.048, "winner": "大盤"},
+        "external_drivers": [{"driver": "consumer_credit", "kill_criterion": "信用卡逾放率連兩季 >5%"}],
+        "external_drivers_change_reason": None,
         "files": ["report.md", "signal_card.json"],
     },
     "RED_TEAM": {
@@ -129,6 +139,8 @@ GOOD = {
         "stop_adding": True,
         "observe_until": "2027-04-16",
         "falsified_assumption": None,
+        "external_drivers": [],
+        "external_drivers_change_reason": None,
         "reason": "疑似，觀察並停止加碼",
     },
     "CORP_ACTION": {
@@ -259,10 +271,24 @@ def test_decision_id_format():
         _, errors = validate.check("FULL_B", obj, SCHEMAS)
         assert errors == [], good
 
-    for bad in ("aapl-20260102-1", "AAPL-2026-01-02-1", "AAPL-20260230-1", "AAPL-20260102", "AAPL20260102-1"):
-        obj["decision_id"] = bad
+    # M3_D4-07：decision_id 由框架編號、不採用模型值 → 任何字串或 null 都不退件
+    for other in ("aapl-20260102-1", "AAPL-2026-01-02-1", "X", None):
+        obj["decision_id"] = other
         _, errors = validate.check("FULL_B", obj, SCHEMAS)
-        assert any(e.startswith("FULL_B.decision_id") for e in errors), bad
+        assert errors == [], other
+    obj["decision_id"] = 123  # A3-M3B-03：decision_id 改選填說明鍵（框架不採用），型別也不擋
+    _, errors = validate.check("FULL_B", obj, SCHEMAS)
+    assert errors == []
+    del obj["decision_id"]   # 漏填不退件
+    assert validate.check("FULL_B", obj, SCHEMAS)[1] == []
+
+    # 規則 5（{ticker}-{YYYYMMDD}-{n}）仍保留在 validate：用最小 schema 鎖住格式與日期有效性
+    spec = {"X": {"decision_id": "{ticker}-{YYYYMMDD}-{n}"}}
+    for good in ("AAPL-20260102-1", "BRK.B-20260102-12"):
+        assert validate.check("X", {"decision_id": good}, spec)[1] == [], good
+    for bad in ("aapl-20260102-1", "AAPL-2026-01-02-1", "AAPL-20260230-1", "AAPL-20260102", "AAPL20260102-1"):
+        _, errors = validate.check("X", {"decision_id": bad}, spec)
+        assert any(e.startswith("X.decision_id") for e in errors), bad
 
 
 def test_missing_required_key_reported():
@@ -299,9 +325,12 @@ def test_stopped_at_gate_accepts_none():
     obj["stopped_at_gate"] = None
     _, errors = validate.check("FULL_A", obj, SCHEMAS)
     assert errors == []
-    obj["stopped_at_gate"] = "G2"
+    obj.update(stopped=True, stopped_at_gate="G2", reason_code="REJECT", rule_ids=["SEL-061"])   # RM2-9
     _, errors = validate.check("FULL_A", obj, SCHEMAS)
     assert errors == []
+    obj["stopped"] = False  # M3_D1-04：stopped=false 卻有停止點 → 跨欄位矛盾
+    _, errors = validate.check("FULL_A", obj, SCHEMAS)
+    assert any(e.startswith("FULL_A：stopped=false") for e in errors), errors
 
 
 def test_stopped_at_gate_range_expanded_in_full_b():

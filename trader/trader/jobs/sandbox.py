@@ -1,6 +1,7 @@
 """工作沙箱與價格隔離。
 
-價格隔離的原則：除 FULL_B 外，沙箱內不得出現任何價格（PRICE_ISOLATED_JOBS）。
+價格隔離的原則：PRICE_ISOLATED_JOBS（DOSSIER、TRIAGE、THESIS、FULL_A）的沙箱不得出現任何價格；
+PRICE、FULL_B、RED_TEAM、HOLD_REVIEW、CORP_ACTION 是看得到價格的工作。
 FULL_B 只能在 gate3 答覆檔「早於」開檔時間（已先完成 gate3）的前提下，由 open_price_file 取得價格檔。
 """
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..models import PRICE_ISOLATED_JOBS, JobSpec
+from .isolation import priced_root
 
 
 class PriceLeakError(Exception):
@@ -30,6 +32,8 @@ PRICE_KEYS = frozenset({
     "auto_buy_cap", "sell_review_above", "absurd_price_line",
 })
 
+# 名稱含 price 但不是價格的鍵（G3 護城河「砍價測試」）；否則 output_schemas.json 進沙箱時會被刪掉（2026-10-18 HIG/ULTA 回報）
+NON_PRICE_KEYS = frozenset({"price_cut"})
 _OPENED_AT_FILE = "price_file_opened_at.txt"
 
 
@@ -49,6 +53,8 @@ def _safe_rel(name: str) -> PurePosixPath:
 def is_price_key(k: str) -> bool:
     """是否為價格相關的鍵：完全符合 PRICE_KEYS，或名稱含 price／market_cap。"""
     s = str(k).lower()
+    if s in NON_PRICE_KEYS:
+        return False
     return s in PRICE_KEYS or "price" in s or "market_cap" in s
 
 
@@ -70,9 +76,15 @@ def _has_price_key(obj: Any) -> bool:
 
 
 def create_sandbox(work_dir: Path, job: JobSpec) -> Path:
-    """建立工作沙箱：{work_dir}/{run_id}/{ticker}/_{job_type}_{n}。已存在則清空重建；設定 job.sandbox。"""
+    """建立工作沙箱：{work_dir}/{run_id}/{ticker}/_{job_type}_{n}。已存在則清空重建；設定 job.sandbox。
+
+    work_dir 是隔離沙箱根（isolation.prepare_root 已建立 {root}-priced）時，看價格的工作改放 priced 根，
+    隔離工作的 claude settings 會封鎖整個 priced 根（兄弟沙箱的價格檔讀不到）。"""
     n = job.job_id.rsplit(":", 1)[-1]
-    path = Path(work_dir) / _safe(job.run_id) / _safe(job.ticker) / f"_{job.job_type}_{_safe(n)}"
+    base = Path(work_dir)
+    if job.job_type not in PRICE_ISOLATED_JOBS and priced_root(base).is_dir():
+        base = priced_root(base)
+    path = base / _safe(job.run_id) / _safe(job.ticker) / f"_{job.job_type}_{_safe(n)}"
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True)
@@ -84,9 +96,9 @@ STALE_SANDBOX_HOURS = 24      # 超過此時數仍留著的看價格沙箱視為
 
 
 def _is_job_sandbox(path: Path, root: Path) -> bool:
-    """{root}/{run_id}/{ticker}/_{JOB}_{n} 形式、且在 root 之下的目錄。"""
+    """{root}/{run_id}/{ticker}/_{JOB}_{n} 形式、且在 root（或其 priced 根）之下的目錄。"""
     p, r = Path(path).resolve(), Path(root).resolve()
-    return p.is_dir() and p.name.startswith("_") and p.parent.parent.parent == r
+    return p.is_dir() and p.name.startswith("_") and p.parent.parent.parent in (r, priced_root(r))
 
 
 def remove_sandbox(path: Path, root: Path) -> bool:
@@ -97,13 +109,20 @@ def remove_sandbox(path: Path, root: Path) -> bool:
     return True
 
 
-def purge_stale_sandboxes(root: Path, now: float | None = None) -> list[str]:
-    """清掉殘留的非隔離工作沙箱（當機或舊版本留下；可能含價格檔）。隔離工作的沙箱本來就不含價格，保留。"""
+def purge_stale_sandboxes(root: Path, now: float | None = None, keep: set[str] | frozenset = frozenset()) -> list[str]:
+    """清掉殘留的看價格沙箱（當機或舊版本留下；可能含價格檔）。隔離工作的沙箱本來就不含價格，保留。
+    priced 根內的沙箱除 keep（仍在執行的工作沙箱路徑）外一律刪除，不等時限；root 內舊版留下的超過時限才刪。"""
     root = Path(root)
     if not root.is_dir():
         return []
-    cutoff = (time.time() if now is None else now) - STALE_SANDBOX_HOURS * 3600
     removed = []
+    pr = priced_root(root)
+    if pr.is_dir():
+        kept = {str(Path(k).resolve()) for k in keep}
+        for p in pr.glob("*/*/_*"):
+            if str(p.resolve()) not in kept and remove_sandbox(p, root):
+                removed.append(str(p))
+    cutoff = (time.time() if now is None else now) - STALE_SANDBOX_HOURS * 3600
     for p in root.glob("*/*/_*"):
         jt = p.name[1:].rsplit("_", 1)[0]
         if jt in PRICE_ISOLATED_JOBS or not p.is_dir() or p.stat().st_mtime >= cutoff:

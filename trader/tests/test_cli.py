@@ -80,13 +80,13 @@ def test_init_succeeds_in_tmp_state_and_creates_db(isolated, capsys):
     assert db_path.exists()
     conn = db.connect(db_path)
     try:
-        assert db.migrate(conn) == 2
+        assert db.migrate(conn) == len(db.MIGRATIONS)
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"jobs", "orders", "corporate_actions", "schema_version"} <= names
     finally:
         conn.close()
     out = capsys.readouterr().out
-    assert "schema 版本 2" in out
+    assert f"schema 版本 {len(db.MIGRATIONS)}" in out
     assert "WARN" in out  # 範例中的金鑰皆未設定，應只警告不失敗
 
 
@@ -169,8 +169,10 @@ def test_doctor_redacts_keys_in_network_errors(isolated, monkeypatch, capsys):
 
 def _install_fake_router(monkeypatch, build):
     mod = types.ModuleType("trader.llm.router")
-    mod.build_runner = build
+    mod.build_runner = lambda tier, *a, **k: build(tier)   # cli 另傳 extra_deny、state_dir（M8-D2-01）
     monkeypatch.setitem(sys.modules, "trader.llm.router", mod)
+    # 假 runner 不檢查沙箱位置：沙箱根換成系統暫存（真實隔離根的行為見 test_fix_P29）
+    monkeypatch.setattr(cli, "_doctor_sandbox_root", lambda cfg, paths: None)
     return mod
 
 

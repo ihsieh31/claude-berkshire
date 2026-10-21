@@ -197,7 +197,7 @@ def test_features_error_row(tmp_path, monkeypatch):
     c = sec.SecClient(UA, tmp_path, http=make_http(base_routes(), calls))
     df = c.features(["BRK-B"], asof="2026-10-16")
     assert df.loc[0, "ticker"] == "BRK.B"
-    assert df.loc[0, "data_notes"] == "抓取失敗：RuntimeError"
+    assert df.loc[0, "data_notes"] == "抓取失敗：RuntimeError: 前視"   # 型別＋訊息（A3-M1C-02）
 
 
 def test_features_real_skill_does_not_crash(tmp_path):

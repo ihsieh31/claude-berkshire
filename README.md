@@ -1,88 +1,115 @@
 # claude-berkshire：波克夏式長期選股與紙上交易
 
-初篩（每季 15 檔）→ 深度分析（G0–G11 閘門、價格隔離、強模型同意閘門）→ 兩週觸發檢查 → 紙上帳本與每日收盤流程。規則在兩個 skill 裡，模型工作由 `trader/` 框架依 `routing/` 調用 Claude Code（`claude -p`）。
+把波克夏式的選股規則寫成兩個 skill，再由 `trader/` 框架自動執行：
 
-## 專案結構
+1. **初篩**（每季）：S&P 500 → 刪結構性垃圾 → 排除統計高風險 → 研究優先排序 → 前 15 檔。
+2. **深度分析**：G0–G11 閘門、價格隔離（前半看不到價格）、閘門 3 問卷、`cap_calc.py` 算買價上限與確定性等級，產出 BUY／WATCH／NO_ACTION 訊號卡；強模型工作要使用者同意才跑。
+3. **trader 紙上交易**：每日收盤流程（公司行動、撮合、觸發檢查、組合計畫、淨值）、紙上帳本、儀表板、匯出與檢討報告。
+
+只做紙上交易（Alpaca paper 帳戶的行情＋本機帳本），不對任何券商送出真實委託。模型由框架依 `routing/` 調用（預設 Claude Code `claude -p`）；skill 腳本本身不呼叫模型。
+
+## 目錄結構
 
 | 路徑 | 內容 |
 |---|---|
-| `berkshire-screen-merged/` | 初篩 skill：結構性刪除、統計排除、研究優先排序（`scripts/screen.py`） |
-| `berkshire-deep-merged/` | 深度分析 skill：規則書、程序、閘門 3 問卷、`cap_calc.py`、`review_due.py` |
-| `routing/` | 模型對應（`model_routing.json`）、每種工作的提示（`prompts/`）與輸出格式（`output_schemas.json`） |
-| `trader/` | 執行框架：資料（SEC／Alpaca／FRED）、工作引擎、寫回、紙上帳本、排程、儀表板、桌面小工具；`tests/` 為全部測試 |
-| `plan.md`、`plan_dashboard.md`、`trader/CONTRACTS*.md` | 整體規劃與各里程碑介面契約 |
-| `handoff.md` | 交接紀錄：現況、決策歷程、待辦（新對話先讀這份） |
-| `換機匯出與封存程序.md` | 在另一台重跑分析、匯出、本機封存舊分析與替換的完整步驟 |
+| `berkshire-screen-merged/` | 初篩 skill：`SKILL.md`、`references/`（證據與資料來源）、`scripts/`（`fetch_edgar.py`、`fetch_prices.py`、`screen.py`、`screen_quant.py`、`test_screen.py`） |
+| `berkshire-deep-merged/` | 深度分析 skill：`SKILL.md`、`references/`（`rulebook.md`、`procedure/`、`rule_index/`、`knowledge/` 思考背景、`inferred_thresholds.md`）、`assets/`（閘門 3 問卷、訊號卡／登錄表 schema、報告範本）、`scripts/`（`build_dossier.py`、`cap_calc.py`、`gate3_check.py`、`deep_quant.py`、`review_due.py`、`test_review_due.py`） |
+| `routing/` | 工作→模型等級（`model_routing.json`）、各工作提示（`prompts/`）、輸出格式（`output_schemas.json`）、說明（`README.md`） |
+| `trader/` | 執行框架。`trader/trader/`：`data/`（SEC、Alpaca、FRED、股票池、P/E 中位）、`analysis/`（資料包、同業、內部人、檢查、回寫）、`jobs/`（工作引擎、沙箱隔離、輸出驗證、同意閘門）、`llm/`（模型後端）、`pipelines/`（screen／analyze／review／daily／bootstrap）、`portfolio/`（部位、G8 比較、相關群）、`ledger/`（帳本、撮合、公司行動）、`report/`（指標、匯出、檢討）、`dashboard/`、`web/`、`scheduler.py`、`cli.py`；`tests/` 全部測試；`desktop/` macOS 小儀表板（Swift）；`CONTRACTS*.md` 各里程碑介面契約 |
+| `plan.md`、`plan_dashboard.md` | 整體規劃、儀表板規劃 |
+| `handoff.md` | 交接紀錄：§0 現況、設計決策、修復總覽、待辦（新對話先讀） |
+| `換機匯出與封存程序.md` | 換機重跑、匯出、本機封存舊分析與替換、還原 |
 | `bug report/` | 歷次審查報告與重現腳本 |
 
-**不在版本控制內**（見 `.gitignore`）：`trader/.env`（金鑰）、`state/`（資料庫、SEC 快取、分析結果、價格）、`test_runs/`（開發期測試分析，含假價格）、審查前的程式備份、桌面小工具編譯產物。
+## 安裝
 
-## 快速開始
+需求：Python ≥ 3.11；Claude Code CLI（`claude`，已登入）；Alpaca 紙上交易帳戶金鑰；FRED 金鑰；SEC User-Agent（須含聯絡 email）。桌面小儀表板與 `scheduler install`／`desktop install` 用 launchd，只支援 macOS。
 
 ```bash
-cd trader && python3 -m pip install -e ".[dev]"
+cd trader
+python3 -m pip install -e ".[dev]"     # 安裝後可用 `trader` 指令（等同 python3 -m trader.cli）
+cp .env.example .env                    # 填 SEC_USER_AGENT、ALPACA_API_KEY、ALPACA_SECRET_KEY、FRED_API_KEY
+trader init                             # 建立 state 與資料庫，檢查設定與金鑰
+trader doctor                           # 連線測試：SEC、Alpaca、FRED、各級模型（--skip-models 略過模型）
 ```
 
-1. `cp trader/.env.example trader/.env`，填入 `SEC_USER_AGENT`（須含 email）、Alpaca 紙上交易金鑰、FRED 金鑰；登入 `claude`。
-2. `trader/config.yaml` 已附（只含環境變數名稱，沒有金鑰）；要改模型或預算再改它。
-3. 建立 state 並測試連線：`cd trader && python3 -m trader.cli init && python3 -m trader.cli doctor`。
-4. 第一次建立名單：`python3 -m trader.cli bootstrap --asof YYYY-MM-DD`；強模型工作會等同意：`approvals list`／`approvals approve`。
-5. 儀表板與桌面小工具：`python3 -m trader.cli desktop install`（http://127.0.0.1:8787/）。排程：`scheduler install`（先讀 `handoff.md` 的前提）。
-6. 測試：`cd trader && python3 -m pytest -q`；初篩自測：`python3 berkshire-screen-merged/scripts/test_screen.py`。
+## 主要指令
 
-## 近期重要變動（2026-10-17）
+一律在 `trader/` 下執行。共通參數：`--config`（預設 `TRADER_CONFIG` 或 `config.yaml`）、`--state-dir`（預設 `TRADER_STATE_DIR` 或專案根目錄的 `state/`）。日期格式 `YYYY-MM-DD`。會寫 state 的指令先取 `state/.pipeline.lock`，另一個寫入指令正在跑時直接結束（exit 2），等它跑完再執行。
 
-- **初篩排序**：非金融六項中「營收成長偏低」改為中性，換成「5 年最差 ROE 高」。目的是提高送進深度分析者通過 G3 的比例，**未回測、不宣稱提高報酬**；2–3 季後比較 G3 命中率再決定是否保留（`berkshire-screen-merged/references/evidence_statistical.md` §2）。
-- **G3 淘汰依據**：FULL_A 輸出新增 `moat_evidence`，寫回記 `reject_basis`（有反證／證據不足／其他），停止碼與 12 個月排除不變。「強」的證據標準不放寬，等 `reject_basis` 累積 2–3 季再議。
-- **資料包補強**：Form 4 內部人交易（只列股數，不含價格）、財報 8-K 的 EX-99.2 等補充資料／簡報、10-K 的 EX-13 致股東年報、10-K 點名但不在 S&P 500 的競爭者、產業衝擊年樣本不足時以 SEC 同 SIC 公司補樣本。
-- **G8 機會成本（2026-10-18）**：框架算好比較表各列給 FULL_B 與 HOLD_REVIEW——加碼最佳持股、最弱持股、觀察名單今天可買者（決策日收盤＋cap_inputs 重算）、3 個月國庫券、大盤（P-66 權益 ÷ GDP 分區 → P-27，區內取值為推論）；任一列高出本標的 ≥1pp 時 BUY 改 WATCH、PRICE 通道的加碼改 HOLD。訊號卡 `g8_adjusted_expected_return` 由腳本重算，排序以當日報價重算。
-- 第三次全專案審查的 H1／H2／M1–M5／L2 已修，詳見 `bug report/review3/REPORT_第三次全專案審查.md` 與 `handoff.md`。
-
-## skill 說明
-
-兩個 skill＋一份模型對應。skill 與腳本都不呼叫模型，只輸出訊號；外部交易框架依 `routing/` 調用模型。若要在 Claude Code 內手動使用，把兩個 skill 資料夾複製到 `~/.claude/skills/`。
-
-| skill | 做什麼 | 頻率 |
+| 指令 | 做什麼 | 常用參數 |
 |---|---|---|
-| `berkshire-screen-merged` | 股票池 → 刪結構性垃圾 → 排除統計高風險 → 研究優先排序 → 前 15 檔 | 每季（財報季後）；大盤跌逾 20% 可加跑 |
-| `berkshire-deep-merged` | 逐檔 G0–G11 判斷買／觀察／不買、買價上限、部位；兩週觸發檢查決定誰需要重看 | 新候選：初篩後；既有標的：每兩週跑 `review_due.py`，論點沒動就不分析 |
+| `trader init` | 建立 state、資料庫，檢查設定與金鑰 | |
+| `trader doctor` | 連線測試 | `--skip-models`；`--state`（只查本機 state，換機前後用）；`--timeout` |
+| `trader fetch` | 抓 features.csv、prices.csv、daily.csv、公司行動、利率 | `--asof`（必填）、`--tickers`、`--out`、`--freeze-pe`、`--refreeze` |
+| `trader screen` | 季度初篩：整個股票池 → `screen.py` → 交接檔（`state/screens/{asof}/`） | `--asof`、`--top 15`、`--special-max 0`、`--inputs DIR`（沿用既有輸入不重抓）、`--force` |
+| `trader bootstrap` | 初篩＋深度分析（建立初始名單；會呼叫模型） | `--asof`、`--tickers`（略過初篩）、`--top`、`--dry-run`、`--force`、`--mark-screened` |
+| `trader analyze` | 深度分析 DOSSIER → FULL_A → FULL_B → RED_TEAM（會呼叫模型） | `--asof`、`--tickers`、`--screen-date`、`--run-id` |
+| `trader review` | 觸發檢查：登錄表 → 訊號 → 起始工作 | `--asof`、`--scope holdings｜watch｜all`、`--run-id`、`--due-only`（只產生 due.json，不呼叫模型） |
+| `trader approvals list／approve／defer／reject` | 強模型同意閘門（FULL_A、RED_TEAM 預設要同意） | `approve ID… ｜ --all [--run]`；`reject ID… --note` |
+| `trader run-approved` | 執行已同意的強模型工作 | `--run-id` |
+| `trader daily` | 每日收盤流程：公司行動、撮合、觸發檢查、組合計畫、淨值 | `--date`（必填）、`--dry-run`、`--skip-review`、`--force`（略過紐約當日須已收盤檢查）。較早交易日未完成時不會先跑較晚日 |
+| `trader jobs list／retry／resume／abandon` | 工作管理（retry、resume 會呼叫模型） | `--run-id`、`--ticker`、`--job-id`、`--no-run` |
+| `trader ledger show／adjust／cancel／pause` | 紙上帳本：摘要、人工調整、撤單、暫停 | `adjust --note`（必填）＋`--cash`／`--deposit`／`--ticker --qty --avg-cost`／`--first-buy-date`／`--resolve ID`／`--unpause T`／`--unpause-all`／`--resolve-corp-action ID`；`pause [T｜--all] --note` |
+| `trader trade buy／sell` | 人工下單（換股、相關群減碼等需人工決定者），寫 MANUAL 決策日誌，下一次 daily 撮合 | `--ticker --qty --note`；buy 必填 `--limit`；`--anomaly ID`、`--date` |
+| `trader decisions void` | 作廢錯誤決策（不刪列） | `ID… --note`、`--superseded-by` |
+| `trader registry retire` | 登錄表標下市／不再追蹤 | `T --note` |
+| `trader db backup` | 本機資料庫快照到 `state/backups/`（保留最近 14 份＋每月最早一份） | `--note` |
+| `trader dashboard` | 本機儀表板 API 與網頁（只聽 127.0.0.1） | `--port`（預設 8787） |
+| `trader desktop build／install／uninstall／status` | macOS 小儀表板與開機自動啟動 | `install --port --no-widget` |
+| `trader scheduler run／once／install／uninstall／status／reset／print` | 常駐排程（沒有期限）；登錄表為空、或還有待同意／未完成的分析工作時拒絕 install | `run --interval`、`reset [任務鍵]`、`print --cron` |
+| `trader export` | 匯出持股、委託、成交、現金、公司行動、分析、淨值、用量、同意、異常、登錄表 | `--what all｜逗號清單`、`--format csv｜json｜xlsx`、`--out` |
+| `trader validate-report` | 前瞻紙上交易檢討（procedure/13 §3） | `--start`、`--end`、`--no-prices`、`--out` |
+| `trader run-job` | 單一工作，除錯用 | `JOB_TYPE TICKER --asof [--fake DIR]` |
 
-## 來源與取捨
+第一次建立名單：`trader bootstrap --asof 日期` → `trader approvals list` → `trader approvals approve --all --run`。排程安裝前先讀 `handoff.md` §0。
 
-| 來源 | 取用 | 理由 |
-|---|---|---|
-| opus 初篩 | 統計排除三條、特殊情境道、研究優先排名、前 15 | 唯一產出固定名單、有兩段期間一致的實證 |
-| hark 初篩 | 結構性刪除 J1/J3/J4/J7、申報日時點、EDGAR 抓取腳本、困境標記、會計旗標 | 申報日時點防前視；刪除規則未誤刪歷史實際買進 |
-| hark 深度分析＋規則書 | 閘門流程、參數、買價上限、確定性等級、部位、自動買進三閘門、論點式賣出、紙上交易驗證 | 數字可計算、可稽核、無價格停損 |
-| opus 深度分析 | 20 份思考背景（能力圈、護城河、會計紅旗、產業、心理誤判等） | 判斷每一步「怎麼想」；已清掉與硬規則衝突的句子、具名案例與人物語氣 |
+## 設定檔
 
-## 合併版新增的設計（都標為推論、未經回測）
+- `trader/config.yaml`（已附，只有環境變數名稱、沒有金鑰）；完整說明見 `trader/config.example.yaml`。主要區塊：
+  - `account`：初始資金、滑價、手續費、現金緩衝、單檔硬上限、基準（SPY）。
+  - `schedule`：時區、收盤時間、觀察名單檢查間隔、季度初篩日、每月 P/E 中位凍結日。
+  - `models.strong／medium／weak`：後端 `claude_code`｜`openai_compat`｜`fake`（測試用）、模型、`effort`、逾時、併發；各工作用哪一級見 `routing/model_routing.json`，`job_tier_overrides` 可覆寫。
+  - `budget`：每次 run 與每日的模型呼叫數、費用、輸入 token 上限（0＝不限，不得為負）。
+  - `data`：SEC／Alpaca／FRED 金鑰的環境變數名稱、Alpaca feed、研究取價來源。
+  - `valuation.cap_discount_k`：自動買進上限＝min(P2′, k × IV_base)，預設 A 0.95、B 0.85。
+  - `dashboard`：host（只限 127.0.0.1）、port。
+- `trader/.env`：金鑰（範本 `.env.example`）。設定檔只寫變數名稱；呼叫模型子程序時框架會移除金鑰環境變數。
+- `state/` 內可放的使用者檔：`universe_override.txt`（自訂股票池）、`exclusions.csv`（人工排除）、`screen_overrides.csv`（撤銷結構性刪除：ticker,date,reason）、`cik_predecessors.json`、`share_class_ratios.csv`（覆蓋套件內同名對照）。
 
-1. **自動買進上限＝min(隱含成長 10% 上限, 基準情境價值)**：原上限在成長偏低的公司會高於基準價值，等於買在一買進就觸發賣出檢視的價位。
-2. **特殊情境「困境中但歷史經濟力佳」**：統計排除＋困境標記＋5 年虧損 ≤1、ROE 中位 ≥12%。預設不交深度分析（`--special-max 0`）。
-3. **兩週觸發檢查 `review_due.py`**（純規則、不用模型；非重大 8-K 與新聞標題另列 `triage`，由框架交模型初判）：新年報、重大 8-K、滿 12 個月 → 完整重跑；新季報、成本 −12%、單日 ±4%、自上次跌 ≥20%、單季跌 ≥25% → 論點檢查；觀察名單跌破上限、持股未達目標且低於上限、超過賣出檢視線或荒謬級線、利率變動 ≥1pp → 只重跑估值到部位；其餘 → 不分析。
-4. 金融股判定：缺 SIC 時的近似條件加上「權益為正、ROA <3%」，避免負權益的非金融股被當成金融股。
+## 測試
+
+```bash
+cd trader && python3 -m pytest -q                         # trader 全套（約 4 分鐘）
+python3 berkshire-screen-merged/scripts/test_screen.py     # 初篩自測（在專案根目錄）
+python3 berkshire-deep-merged/scripts/test_review_due.py   # 觸發檢查自測
+```
+
+目前結果（2026-10-21，本次待推送 commit 的乾淨匯出）：**3195 passed、3 failed、12 skipped**。3 個失敗是已知的環境性失敗，不是程式錯：
+
+- `test_fix_P23::test_lock_held_env_only_honoured_for_parent_pid`：平行執行時偶發，單跑會過。
+- `test_fix_P35::test_clean_hark_estimates_tool`：需要 B 機專用工具，本 repo 不含。
+- `test_fix_RM1_5::test_state_2026_10_frozen_file_has_ttm_financial_median`：需要凍結的 state 檔（state 不進版本控制）。
+
+## 安全注意
+
+- **只做紙上交易**。任何 BUY 候選在改用真錢前都要人工複核；上線順序是先跑前瞻紙上交易，再依檢討決定（`berkshire-deep-merged/references/procedure/13_forward_validation.md`）。
+- **不得提交**：`trader/.env`（金鑰）、`state/`（含 `trader.db`、SEC 快取、分析結果、價格檔）、`test_runs/`、匯出與修補產物。`.gitignore` 已擋，提交前仍要確認。
+- 金鑰只放 `.env` 或環境變數；程式與設定檔不得寫死金鑰或 email。
+- 儀表板只聽本機，同意等寫入 API 需要 `state/.dashboard_token`（權限 600）並檢查 Host／Origin。
+- 價格隔離：DOSSIER、TRIAGE、THESIS、FULL_A 的沙箱不得出現價格檔或價格字句（含可推得價格的數字，例如回購均價、增資發行價、轉換價）；FULL_B 在閘門 3 作答之後才開價格檔。
 
 ## 能不能賺錢（照實說）
 
 - 有證據的：初篩**降低踩雷**（3 年大跌機率下降、被刪者壞結果約 3 倍）。
 - 沒有證據的：排名提高報酬（逐期模擬不顯著）、整條流程的報酬（深度分析靠判斷，無法完整回測）。
-- 因此上線順序：**先 3 個月紙上交易**（`berkshire-deep-merged/references/procedure/13_forward_validation.md`），每筆決策寫入日誌，期滿對大盤與初篩母體檢討，再決定是否用真錢、用多少。
-
-## 驗證紀錄
-
-- `berkshire-screen-merged/scripts/test_screen.py`：合成資料自測（刪除、例外、排除、特殊道、拆股市值、前視中止、交接檔）。
-- `berkshire-deep-merged/scripts/test_review_due.py`：觸發檢查自測（16 種情境）。
-- `cap_calc.py`、`gate3_check.py`：範例輸入、D 級／缺值、價格隔離時間戳皆測過。
-- `build_dossier.py`：真實 SEC 資料產出 10 年表與資料品質警示；合成資料驗證 EPS 不一致、整數 EPS、現金流偏低、缺年四種警示。
-- 試點：sonnet 子代理對一檔大型股跑完整深度分析（只給數字、不給年報文字）→ 正確停在 `MISSING_DATA`、價格隔離有遵守；回饋 23 項已全部處理。
-- 真實資料：本機 SEC XBRL 與日線股價，40 檔大型股跑通初篩；發現並修正封面股數過期、金融股近似誤判、特殊道收錄過寬三個問題。
-- `trader/`：772 個測試全過（2026-10-18）；SQLite 完整性檢查 ok；`daily --dry-run`、`review --due-only` 對真實 Alpaca／SEC／FRED 驗證過。
-- 2026-10-15 第一批 15 檔真實深度分析：零 BUY（OTIS＝WATCH C 級、LOW＝TOO_HARD、其餘 REJECT）。這批將在換機重跑後封存為樣本，不再採用（見 `換機匯出與封存程序.md`）。
+- 合併版自訂的參數（自動買進上限的 k、困境特殊情境、兩週觸發檢查門檻等）都標為推論、未經回測，見 `berkshire-deep-merged/references/inferred_thresholds.md`。
 
 ## 已知限制
 
 - 證據來自美國大型股；其他市場、小型股未驗證。
-- `fetch_prices.py` 用 Yahoo 非官方介面；月線最後一根含決策日之後的價格，回測要用 `--manual` 日價。
-- 多類股公司可能停報封面合計股數，改用年報加權稀釋股數，市值可能略有誤差（報告會標示）。
+- S&P 500 名單是現有成分股（存活者偏差），只影響回測，不影響往後的紙上交易。
+- `fetch_prices.py`（skill 單獨使用時）用 Yahoo 非官方介面；框架的撮合、限價、成交量一律用 Alpaca。
+- 多類股公司可能停報封面合計股數，改用申報 XBRL 推算，市值可能略有誤差（報告會標示）。
 - 深度分析需要年報文字、附註、委託書；只有數字時正確結論是 `MISSING_DATA`。
+- 修復歷程與設計決策見 `handoff.md`；最近一輪見「2026-10-21 第三輪（A3）修復總覽」。

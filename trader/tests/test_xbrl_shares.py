@@ -473,7 +473,7 @@ def test_fill_filled_and_rejected_and_skips(tmp_path):
     assert "1000" in by["HIGH"]["detail"]  # P/E 寫在說明中
     assert pd.isna(row.loc["HIGH", "shares_cover"])
     assert pd.isna(row.loc["HIGH", "shares_cover_filed"])
-    assert pd.isna(row.loc["HIGH", "data_notes"])  # 被拒絕不追加備註
+    assert row.loc["HIGH", "data_notes"] == "多類股股數換算被拒：換算結果未通過合理性檢查"  # 寫原因、不含 P/E（P39）
     assert row.loc["LOSS", "shares_cover"] == 1_000_000
     assert row.loc["HAS", "shares_cover"] == 5.0
     assert "NOCIK" in set(out["ticker"])

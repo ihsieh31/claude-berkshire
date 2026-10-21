@@ -8,7 +8,7 @@
 安全原則（這是會用於金錢交易的系統）：
 - 不猜比例：任何缺值、EPS ≤ 0、代號對不上、重複但數值衝突，一律回 None。
 - 換算結果另以 P/E 合理性檢查把關；超出 [3, 200] 直接拒絕、不寫值。
-- 網路請求只經 sec.http.get()，且只允許 https://www.sec.gov/ 開頭的網址。
+- 網路請求只經 sec.http.get()（經 sec._request 包裝：封鎖冷卻），且只允許 https://www.sec.gov/ 開頭的網址。
 - 命名空間只用 URI 判斷（含 /dei/、/us-gaap/），不寫死前綴與年份。
 """
 from __future__ import annotations
@@ -34,6 +34,7 @@ EPS_DILUTED = "EarningsPerShareDiluted"
 EPS_BASIC = "EarningsPerShareBasic"
 EPS_TOL = 0.01          # 無基準類別時，各類 EPS 相對差距需小於 1%
 PE_MIN, PE_MAX = 3.0, 200.0
+MAX_TRY = 3   # 由新到舊最多試幾份申報（M1-D7-6）
 _NON_INSTANCE_SUFFIX = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml")
 
 
@@ -103,6 +104,12 @@ def _cik_str(cik: Any) -> str:
 # ---------------------------------------------------------------------------
 # 1. 找 instance 網址、2. 抓取（含快取）
 # ---------------------------------------------------------------------------
+def _get(sec: Any, url: str):
+    """經 SecClient._request 送出（SEC 封鎖起算冷卻、冷卻後重試，A3-M4E-02）；沒有 _request 的替身直接 http.get。"""
+    req = getattr(sec, "_request", None)
+    return req(sec.http.get, url) if req is not None else sec.http.get(url)
+
+
 def find_instance_url(sec: Any, cik: Any, accession: str) -> str | None:
     """依申報目錄 index.json 找 XBRL instance。
 
@@ -112,7 +119,7 @@ def find_instance_url(sec: Any, cik: Any, accession: str) -> str | None:
     acc = accession.replace("-", "")
     base = f"{ARCHIVE}{int(cik)}/{acc}/"
     _require_sec_url(base)
-    data = sec.http.get(base + "index.json").json()
+    data = _get(sec, base + "index.json").json()
     items = (data.get("directory") or {}).get("item") or []
     names = [str(it["name"]) for it in items if it.get("name")]
     inline = sorted(n for n in names if n.lower().endswith("_htm.xml"))
@@ -139,7 +146,7 @@ def fetch_instance(sec: Any, cik: Any, filing: dict) -> str:
     if url is None:
         raise XbrlError(f"找不到 XBRL instance：{acc}")
     _require_sec_url(url)
-    text = sec.http.get(url).text
+    text = _get(sec, url).text
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")  # 先寫暫存檔再換名，避免半寫入的快取
     tmp.write_text(text, encoding="utf-8")
@@ -553,6 +560,8 @@ def fill_missing_shares(feats: pd.DataFrame, prices: pd.DataFrame, sec: Any, aso
         out[col] = out[col].astype(object)
     ratios = load_ratios(ratios_path)
     prices_by = _price_map(prices)
+    splits_by = ({_norm(t): v for t, v in zip(prices["ticker"], prices["splits"]) if isinstance(v, str) and v}
+                 if prices is not None and "splits" in prices.columns else {})
     report: list[dict] = []
     asof10 = asof[:10]
 
@@ -565,45 +574,61 @@ def fill_missing_shares(feats: pd.DataFrame, prices: pd.DataFrame, sec: Any, aso
         key = _norm(ticker)
         try:
             result, detail, shares_val, filed, note = _fill_one(
-                row, key, sec, asof10, ratios, prices_by)
+                row, key, sec, asof10, ratios, prices_by, splits_by)
         except Exception as e:  # 單檔例外不得中斷其他檔
-            report.append({"ticker": ticker, "result": "failed", "detail": f"{type(e).__name__}：{e}"})
-            continue
+            result, detail, note = "failed", f"{type(e).__name__}：{e}", f"多類股股數換算失敗：{type(e).__name__}"
         report.append({"ticker": ticker, "result": result, "detail": detail})
         if result in ("filled", "ratio"):
             out.iat[pos, out.columns.get_loc("shares_cover")] = shares_val
             out.iat[pos, out.columns.get_loc("shares_cover_filed")] = filed
+        if note:   # rejected／failed 也寫原因（不含 P/E、價格；M1-D5-04），screen.csv 看得出為何資料不足
             cn = out.columns.get_loc("data_notes")
             out.iat[pos, cn] = _append_note(out.iat[pos, cn], note)
     return out, report
 
 
 def _fill_one(row: pd.Series, key: str, sec: Any, asof10: str, ratios: dict,
-              prices_by: dict[str, float]) -> tuple[str, str, float | None, str | None, str | None]:
-    """單檔處理，回傳 (result, detail, 寫入股數, 寫入 filed, 寫入的 data_notes 片段)。"""
+              prices_by: dict[str, float], splits_by: dict[str, str] | None = None
+              ) -> tuple[str, str, float | None, str | None, str | None]:
+    """單檔處理，回傳 (result, detail, 寫入股數, 寫入 filed, 寫入的 data_notes 片段)。
+    依申報日由新到舊最多試 MAX_TRY 份，取第一份能換算者：只修正封面或 Part III、無 EPS 的 10-K/A、10-Q/A
+    不再讓整季落入資料不足（M1-D7-6）。data_notes 片段不含 P/E 或價格（screen_context 會帶進價格盲前半）。"""
     cik = _cik_str(row["cik"])
     filings = [f for f in sec.filings(cik, asof10, forms=FORMS)
                if str(f.get("filingDate", ""))[:10] < asof10]
     if not filings:
-        return "failed", "asof 前無 10-K／10-Q 申報", None, None, None
-    latest = max(filings, key=lambda f: str(f["filingDate"]))
-
-    src_cik = _cik_str(latest.get("cik") or cik)   # 有前身 CIK 時，申報可能屬於前身
-    parsed = parse_instance(fetch_instance(sec, src_cik, latest))
+        return "failed", "asof 前無 10-K／10-Q 申報", None, None, "多類股股數換算失敗：asof 前無 10-K／10-Q 申報"
     use_ratio = key in ratios
-    eq = ratio_shares(parsed, ratios[key]) if use_ratio else equivalent_shares(parsed, str(row["ticker"]))
+    eq, tried, err, n_err = None, [], None, 0
+    for latest in sorted(filings, key=lambda f: str(f["filingDate"]), reverse=True)[:MAX_TRY]:
+        tried.append(f"{latest['form']} {latest['filingDate']}")
+        src_cik = _cik_str(latest.get("cik") or cik)   # 有前身 CIK 時，申報可能屬於前身
+        try:
+            parsed = parse_instance(fetch_instance(sec, src_cik, latest))
+        except Exception as e:  # 該份無 instance 或解析失敗：試下一份
+            err, n_err = e, n_err + 1
+            continue
+        eq = ratio_shares(parsed, ratios[key]) if use_ratio else equivalent_shares(parsed, str(row["ticker"]))
+        if eq is not None:
+            break
     if eq is None:
-        return "rejected", f"XBRL 無法可靠換算等值股數（{latest['form']} {latest['filingDate']}）", None, None, None
+        if n_err == len(tried):   # 每份都抓不到或解析失敗 → failed
+            raise err
+        return ("rejected", f"XBRL 無法可靠換算等值股數（試過 {'、'.join(tried)}）", None, None,
+                "多類股股數換算被拒：XBRL 無法可靠換算等值股數")
     total, desc = eq
+    rej = "多類股股數換算被拒：換算結果未通過合理性檢查"
 
     ni = _to_float(row.get("net_income"))
     if ni is not None and ni > 0:
         price = prices_by.get(key)
         if price is None:
-            return "rejected", "net_income>0 但缺價格，無法檢查 P/E", None, None, None
-        pe = price * total / ni
+            return "rejected", "net_income>0 但缺價格，無法檢查 P/E", None, None, "多類股股數換算被拒：缺價格，無法做合理性檢查"
+        # 價格是 price_date 當天基準；股數是申報當時基準 → 乘申報日後的拆股（與 screen.build 同一個 split_factor，M1-D4-05）
+        from .prices_adapter import _skill
+        pe = price * total * _skill("screen").split_factor((splits_by or {}).get(key, ""), str(latest["filingDate"])[:10]) / ni
         if not (PE_MIN <= pe <= PE_MAX):
-            return "rejected", f"P/E {pe:.1f} 超出 [{PE_MIN:g}, {PE_MAX:g}]；{desc}", None, None, None
+            return "rejected", f"P/E {pe:.1f} 超出 [{PE_MIN:g}, {PE_MAX:g}]；{desc}", None, None, rej
         pe_txt = f"P/E {pe:.1f}"
     else:
         pe_txt = "淨利 ≤0 或缺，未檢查 P/E"

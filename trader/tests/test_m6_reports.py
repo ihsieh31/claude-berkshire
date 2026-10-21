@@ -51,7 +51,7 @@ def test_export_formats(tmp_path):
     out = X.export(env.conn, list(X.DATASETS), "xlsx", tmp_path / "ex", "2026-01-07")
     from openpyxl import load_workbook
     wb = load_workbook(out[0])
-    assert set(wb.sheetnames) == set(X.DATASETS) and wb["nav"].max_row == 4
+    assert set(wb.sheetnames) == {"meta", *X.DATASETS} and wb["nav"].max_row == 4
     files = X.export(env.conn, ["nav", "cash"], "csv", tmp_path / "ex", "d")
     assert [f.name for f in files] == ["nav_d.csv", "cash_d.csv"]
     j = json.loads(X.export(env.conn, ["nav"], "json", tmp_path / "ex", "d")[0].read_text())
@@ -83,7 +83,8 @@ def test_validation_report(tmp_path):
     c = env.conn
     _book(c)
     db.insert(c, "orders", {"order_id": "o1", "ticker": "KO", "side": "BUY", "qty": 100, "limit_price": 55.0,
-                            "status": "filled", "created_date": "2026-01-02", "updated_at": db.now_iso()})
+                            "status": "filled", "created_date": "2026-01-02", "decision_id": "KO-1",
+                            "updated_at": db.now_iso()})
     db.insert(c, "fills", {"order_id": "o1", "ticker": "KO", "side": "BUY", "qty": 100, "price": 50.0, "fill_date": "2026-01-05"})
     _decision(c, "KO-1", "KO", "2026-01-02", {"action": "BUY", "gate1_not_deleted": True, "gate2_price_below_cap": True,
                                               "gate3_pass": True, "gate3_answers_file": None, "fy_last_filed": "2025-02-01",

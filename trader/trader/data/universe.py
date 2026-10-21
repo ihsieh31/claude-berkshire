@@ -1,6 +1,9 @@
 """S&P 500 股票池：override 優先、快取、下載、過期重抓與舊快取備援；名單變動才寫入 universe_versions。
 
-代號標準形：大寫、點號（`BRK.B`）。下載結果少於 MIN_UNIVERSE 檔視為來源異常，不寫快取。
+代號標準形：大寫、點號（`BRK.B`）。下載結果少於 MIN_UNIVERSE 檔視為來源異常，不寫快取；
+快取以暫存檔＋替換寫入，讀取時無法解析或少於 MIN_UNIVERSE 檔（半截檔）視同沒有快取。
+多類股公司（GOOG／GOOGL 等）各類別各為一檔代號；算市值用的等值股數採各類別 EPS 比例（經濟權益），
+見 xbrl_shares.py 與 share_class_ratios.csv（決策 D65）。
 """
 from __future__ import annotations
 
@@ -9,17 +12,18 @@ import json
 import hashlib
 import io
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from trader import db
-from trader.data.http import DataError, HttpClient
+from trader.data.http import DataError, HttpClient, atomic_write_text
 from trader.paths import Paths
 
 SP500_SOURCES = ["https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"]
 MIN_UNIVERSE = 450  # 少於此檔數視為來源異常
 OVERRIDE_NAME = "universe_override.txt"
 CACHE_NAME = "sp500.csv"
+BACKFILL_LAG_DAYS = 4  # asof 早於 UTC 今天這麼多天才算補跑（容許台灣／美東時差與週末，M1-D7-3）
 
 
 def normalize_ticker(s: str) -> str:
@@ -46,13 +50,27 @@ def _parse_csv(text: str) -> list[str]:
     return sorted(set(out))
 
 
+def _read_cache(path: Path) -> list[str] | None:
+    """讀股票池快取；不存在、無法解析或少於 MIN_UNIVERSE 檔（例如被殺留下的半截檔）回 None。"""
+    try:
+        tickers = _parse_csv(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, csv.Error, DataError):
+        return None
+    return tickers if len(tickers) >= MIN_UNIVERSE else None
+
+
 def _age_seconds(path: Path) -> float:
     return time.time() - path.stat().st_mtime
 
 
+def universe_sha256(tickers: list[str]) -> str:
+    """名單指紋：排序後以換行串接的 sha256（universe_versions 與 inputs/universe.txt 同一算法）。"""
+    return hashlib.sha256("\n".join(sorted(tickers)).encode("utf-8")).hexdigest()
+
+
 def _record_version(conn, tickers: list[str], source: str) -> None:
-    """名單（排序後以換行串接）的 sha256 與最後一列不同才新增一列。"""
-    digest = hashlib.sha256("\n".join(tickers).encode("utf-8")).hexdigest()
+    """名單 sha256 與最後一列不同才新增一列。"""
+    digest = universe_sha256(tickers)
     row = conn.execute("SELECT sha256 FROM universe_versions ORDER BY version_id DESC LIMIT 1").fetchone()
     if row is not None and row["sha256"] == digest:
         return
@@ -84,7 +102,7 @@ def load_universe(paths: Paths, conn, http: HttpClient | None = None, refresh: b
                   max_age_days: float = 7, asof: str | None = None) -> tuple[list[str], str]:
     """回傳 (代號清單，來源)；來源為 override | download | cache | cache_stale | version:{日期} | 前述＋"_not_pit"。
 
-    asof 早於今天（補跑過去日期）：改用 universe_versions 中 asof ≤ 該日的最後一版（時點正確）；
+    asof 早於 UTC 今天 BACKFILL_LAG_DAYS 天以上（補跑過去日期）：改用 universe_versions 中 asof ≤ 該日、來源非 override 的最後一版（時點正確）；
     沒有那麼早的版本 → 仍用目前名單，來源加註 "_not_pit"（成分股可能含之後才納入者）。
     """
     override = paths.state / OVERRIDE_NAME
@@ -95,9 +113,10 @@ def load_universe(paths: Paths, conn, http: HttpClient | None = None, refresh: b
         _record_version(conn, tickers, "override")
         return tickers, "override"
 
-    today = datetime.now(timezone.utc).date().isoformat()
-    if asof is not None and asof < today:
-        row = conn.execute("SELECT asof, tickers FROM universe_versions WHERE asof <= ? "
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=BACKFILL_LAG_DAYS)).isoformat()
+    if asof is not None and asof < cutoff:
+        # override 名單不是成分股紀錄（測試／備援用），不當時點版本（M1-R7-01）
+        row = conn.execute("SELECT asof, tickers FROM universe_versions WHERE asof <= ? AND source != 'override' "
                            "ORDER BY asof DESC, version_id DESC LIMIT 1", (asof,)).fetchone()
         if row is not None:
             return list(json.loads(row["tickers"])), f"version:{row['asof']}"
@@ -106,20 +125,23 @@ def load_universe(paths: Paths, conn, http: HttpClient | None = None, refresh: b
 
     cache = paths.cache / "universe" / CACHE_NAME
     if cache.exists() and not refresh and _age_seconds(cache) < max_age_days * 86400:
-        tickers = _parse_csv(cache.read_text(encoding="utf-8"))
-        _record_version(conn, tickers, "cache")
-        return tickers, "cache"
+        tickers = _read_cache(cache)
+        if tickers is not None:  # 快取不合格 → 視同沒有快取，往下重抓
+            _record_version(conn, tickers, "cache")
+            return tickers, "cache"
 
     own_http = http is None
     client = http or HttpClient(min_interval=0.0, retries=2, base_delay=1.0)
     try:
         try:
             tickers, text = _download(client)
-        except DataError:
-            # 下載失敗：有舊快取就用舊快取（來源標 cache_stale），否則把錯誤往上丟
-            if not cache.exists():
-                raise
-            tickers = _parse_csv(cache.read_text(encoding="utf-8"))
+        except DataError as e:
+            # 下載失敗：有合格的舊快取就用舊快取（來源標 cache_stale），否則把錯誤往上丟
+            tickers = _read_cache(cache)
+            if tickers is None:
+                if not cache.exists():
+                    raise
+                raise DataError(f"{e}；舊快取無法解析或少於 {MIN_UNIVERSE} 檔，不採用") from e
             _record_version(conn, tickers, "cache_stale")
             return tickers, "cache_stale"
     finally:
@@ -127,6 +149,6 @@ def load_universe(paths: Paths, conn, http: HttpClient | None = None, refresh: b
             client.close()
 
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(text, encoding="utf-8")
+    atomic_write_text(cache, text)
     _record_version(conn, tickers, "download")
     return tickers, "download"

@@ -27,7 +27,9 @@ let options = Options()
 // ---------------------------------------------------------------- 資料
 struct Top: Decodable { let ticker: String; let weight: Double?; let `return`: Double? }
 struct PnL: Decodable { let total: Double }
-struct Approvals: Decodable { let n_pending: Int; let est_input_tokens: Int; let est_minutes: Double; let label: String? }
+// ids／tickers：畫面上這批 pending（D54：伺服器只收明確編號，不收 all）；舊伺服器沒有這兩欄時為 nil
+struct Approvals: Decodable { let n_pending: Int; let est_input_tokens: Int; let est_minutes: Double; let label: String?; let ids: [Int]?; let tickers: [String]? }
+struct Health: Decodable { let warning: String? }   // 排程健康（M8-D4-05），只取一行警示
 struct Summary: Decodable {
     let empty: Bool
     let as_of: String?
@@ -40,6 +42,7 @@ struct Summary: Decodable {
     let n_positions: Int?
     let top3: [Top]?
     let approvals: Approvals
+    let health: Health?
 }
 struct NavPoint: Decodable { let date: String; let account: Double?; let spy: Double? }
 struct Nav: Decodable { let points: [NavPoint] }
@@ -72,13 +75,15 @@ final class Model: ObservableObject {
         }
     }
 
-    func approveAll() async -> String {
+    /// 同意確認框當時看到的那批編號（ids 來自 /api/summary 的 approvals.ids，與網頁 app.js 送法一致）。
+    func approveAll(_ ids: [Int]) async -> String {
+        guard !ids.isEmpty else { return "沒有待同意編號（請重新整理或改用網頁）" }
         guard let tok = options.token() else { return "找不到權杖檔（--state）" }
         var r = URLRequest(url: options.base.appendingPathComponent("api/approvals/approve"))
         r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.setValue(tok, forHTTPHeaderField: "X-Dashboard-Token")
-        r.httpBody = try? JSONSerialization.data(withJSONObject: ["all": true, "via": "desktop"])
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["ids": ids, "via": "desktop"] as [String: Any])
         busy = true
         defer { busy = false }
         do {
@@ -202,6 +207,7 @@ struct WidgetView: View {
                 Text("第一次 trader daily 之後出現").font(.system(size: 12)).foregroundStyle(ink2)
                 Spacer()
                 if s.approvals.n_pending > 0 { approveButton(s.approvals) }
+                healthLine(s)
                 footnote
             }
         } else if let s = model.summary {
@@ -239,6 +245,7 @@ struct WidgetView: View {
                     if (s.top3 ?? []).isEmpty { Text("尚無持股").font(.system(size: 12)).foregroundStyle(ink2) }
                 }.padding(.top, 10)
                 if s.approvals.n_pending > 0 { approveButton(s.approvals).padding(.top, 12) }
+                healthLine(s)
                 footnote
             }
         } else {
@@ -266,6 +273,12 @@ struct WidgetView: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder func healthLine(_ s: Summary) -> some View {
+        if let w = s.health?.warning, !w.isEmpty {
+            Text("⚠ \(w)").font(.system(size: 10.5)).foregroundStyle(downColor).lineLimit(2).padding(.top, 6)
+        }
+    }
+
     @ViewBuilder var footnote: some View {
         if let m = message { Text(m).font(.system(size: 10.5)).foregroundStyle(ink2).padding(.top, 6) }
     }
@@ -275,12 +288,15 @@ struct WidgetView: View {
             let tok = String(format: "%.1fM", Double(a.est_input_tokens) / 1e6)
             let alert = NSAlert()
             alert.messageText = "同意以 opus 分析 \(a.n_pending) 檔（約 \(tok) token）？"
-            alert.informativeText = "約 \(Int(a.est_minutes.rounded())) 分鐘。延後的項目不含在內。程式讀不到訂閱額度，請先確認 Claude 額度足夠。"
+            let ids = a.ids ?? []
+            let names = (a.tickers ?? []).joined(separator: "、")
+            alert.informativeText = (names.isEmpty ? "" : "代號：\(names)。\n")
+                + "約 \(Int(a.est_minutes.rounded())) 分鐘。延後的項目不含在內。程式讀不到訂閱額度，請先確認 Claude 額度足夠。"
             alert.addButton(withTitle: "同意並執行")
             alert.addButton(withTitle: "取消")
             NSApp.activate(ignoringOtherApps: true)
             if alert.runModal() == .alertFirstButtonReturn {
-                Task { message = await model.approveAll() }
+                Task { message = await model.approveAll(ids) }
             }
         } label: {
             HStack(spacing: 8) {

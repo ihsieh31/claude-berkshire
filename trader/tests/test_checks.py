@@ -155,11 +155,19 @@ def _cap(tmp_path, **kw):
 
 
 def test_golden_declining_history_caps_at_k_times_iv0(tmp_path):
-    # r_d＝max(10%, 4%＋3pp)＝10%；IV0＝5÷0.10＝50；B 級 ×0.75 → 37.5（P2′ 與 IV_base≈51.1 都較高）
+    # r_d＝max(10%, 4%＋3pp)＝10%；IV0＝5÷0.10＝50；B 級 ×0.75 → 硬上限 37.5（P2′ 較高）。
+    # IV_base：起始成長＝較高期 −2%（路徑各年皆 −2%）、歷史成長 ≤0 → 永續 0%（D21）：
+    #   Σ_{t=1..10} 5×0.98^t÷1.1^t ＋ 5×0.98^10÷0.10÷1.1^10 ≈ 43.72099
+    # ASK-1＝B：auto_buy_cap_raw＝min(37.5, 0.85×43.72099≈37.1628)；D90：auto_buy_cap＝0.95×raw
     r = _cap(tmp_path, g10=-0.05, g5=-0.02)
     assert r["r_d"] == pytest.approx(0.10)
     assert r["IV0"] == pytest.approx(50.0)
-    assert r["cap"] == pytest.approx(37.5) and r["auto_buy_cap"] == pytest.approx(37.5)
+    iv_base = sum(5 * 0.98 ** t / 1.1 ** t for t in range(1, 11)) + 5 * 0.98 ** 10 / 0.10 / 1.1 ** 10
+    assert iv_base == pytest.approx(43.72099, abs=1e-5)
+    assert r["IV_base"] == pytest.approx(43.72099, abs=1e-3)
+    assert r["cap"] == pytest.approx(37.5)
+    assert r["auto_buy_cap_raw"] == pytest.approx(0.85 * 43.72099, abs=1e-3)  # ≈37.1628
+    assert r["auto_buy_cap"] == pytest.approx(0.95 * 0.85 * 43.72099, abs=1e-3)  # D90
     assert r["components"]["IV0_cap"] == pytest.approx(37.5)
 
 
@@ -167,13 +175,13 @@ def test_golden_zero_growth_conservative_is_perpetuity(tmp_path):
     # g＝0、保守終值 0% → IV_cons＝E÷r_d＝50；歷史成長 ≤0 → 上限 0.75×50＝37.5
     r = _cap(tmp_path, g10=0.0, g5=0.0)
     assert r["IV_cons"] == pytest.approx(50.0, abs=1e-3)
-    assert r["auto_buy_cap"] == pytest.approx(37.5)
+    assert r["auto_buy_cap_raw"] == pytest.approx(37.5) and r["auto_buy_cap"] == pytest.approx(0.95 * 37.5)  # D90
 
 
 def test_golden_financial_override_uses_p1(tmp_path):
     # 金融：不做 P2′、無 P/E 中位 → 上限＝P1＝A 級 0.85×IV_cons 40＝34；r_stress＝max(10%, 10%)＝r_d → P3＝34
     r = _cap(tmp_path, financial=True, grade="A", g10=None, g5=None, iv_cons=40.0, iv_base=50.0, iv_opt=60.0, price=30.0)
-    assert r["auto_buy_cap"] == pytest.approx(34.0)
+    assert r["auto_buy_cap_raw"] == pytest.approx(34.0) and r["auto_buy_cap"] == pytest.approx(0.95 * 34.0)  # D90
     assert r["components"]["P2_prime"] is None
     assert r["components"]["P3_report_only"] == pytest.approx(34.0)
 
@@ -366,7 +374,9 @@ def test_buy_with_price_above_cap_becomes_watch():
 @pytest.mark.parametrize("cap", [
     {"auto_buy_cap": None, "price": 40.0, "grade_used": "B"},
     {"auto_buy_cap": 50.0, "price": 40.0, "grade_used": "C"},
-    {"auto_buy_cap": 50.0, "price": 49.0, "grade_used": "A", "conclusion_test": {"flips": True}},
+    # F3-GLUE（D90）：原「conclusion_test.flips → WATCH」案例刪除（cap_calc 不再輸出 conclusion_test，閘門 2 不再查）；
+    # 距上限 <5% 的安全邊際改由 auto_buy_cap＝0.95×原始上限承擔，現價 ≥ 上限即不通過
+    {"auto_buy_cap": 50.0, "price": 50.0, "grade_used": "A"},
 ])
 def test_buy_gate2_other_failures(cap):
     assert cap_signal_by_gates("BUY", PASS_GATE, "PASS", cap)[0] == "WATCH"
@@ -377,10 +387,11 @@ def test_buy_gate2_pass_stays_buy():
 
 
 def test_golden_financial_conclusion_test_uses_e_haircut(tmp_path):
-    # 金融覆寫 IV_cons＝40、A 級：上限 34；現價 33（距上限 <5%）→ E×0.9 → 0.85×40×0.9＝30.6 < 33 → 翻轉
+    # 金融覆寫 IV_cons＝40、A 級：原始上限 34；現價 33（距上限 <5%）。舊結論測試 E×0.9 → 30.6 < 33 → WATCH；
+    # D90 起同一結果由 auto_buy_cap＝0.95×34＝32.3 承擔（現價 ≥ 上限 → WATCH），不再輸出 conclusion_test
     r = _cap(tmp_path, financial=True, grade="A", g10=None, g5=None, iv_cons=40.0, iv_base=50.0, iv_opt=60.0, price=33.0)
-    ct = r["conclusion_test"]
-    assert ct["P2_prime_with_E_x0.9"] == pytest.approx(30.6) and ct["flips"] is True
+    assert r["auto_buy_cap"] == pytest.approx(32.3) and "price_ge_cap" in r["watch_reasons"]
+    assert r.get("conclusion_test") is None
 
 
 def test_golden_financial_cap_is_min_of_p1_and_p4(tmp_path):
@@ -388,4 +399,4 @@ def test_golden_financial_cap_is_min_of_p1_and_p4(tmp_path):
     r = _cap(tmp_path, financial=True, grade="A", g10=None, g5=None, iv_cons=40.0, iv_base=50.0, iv_opt=60.0,
              price=30.0, largecap_pe_median=20.0, fin_pe_median=15.0)
     assert r["components"]["P4p"] == pytest.approx(82.5)
-    assert r["cap"] == pytest.approx(34.0) and r["auto_buy_cap"] == pytest.approx(34.0)
+    assert r["cap"] == pytest.approx(34.0) and r["auto_buy_cap"] == pytest.approx(0.95 * 34.0)  # D90

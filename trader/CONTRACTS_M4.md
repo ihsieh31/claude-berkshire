@@ -156,18 +156,27 @@ trader review --asof D [--scope holdings|watch|all] [--run-id X] [--due-only] [-
      - 鍵名見 cap_calc 輸出與 `checks._IV_MAP`；荒謬級線的鍵名請到 cap_calc.py 確認。
   2. gate2 由框架重算：price < cap。cap 為 None 時判「無上限」。
   3. gate3 由框架判斷：取該檔最近一次 FULL_B 決策（decisions 表）的 `gate3_pass == true`，且距今 ≤ 365 天。
-- **proposed_action 對應的決策 action**：
+- **proposed_action：選填、只記日誌，動作由框架算（設計決策 D28；賣出側 D03）**：
+  - 模型的 `proposed_action` 不採信，只寫進 `result.model_proposed_action` 與決策日誌的 `framework_notes`。
+  - 買進側（`review_jobs._framework_action`）：只看框架三閘門、是否持股、權重與目標權重。
 
-  | proposed_action | 條件 | action |
-  |---|---|---|
-  | BUY_CANDIDATE | 框架三閘門全過，WATCH | BUY |
-  | BUY_CANDIDATE | 框架三閘門全過，HOLDING | ADD |
-  | BUY_CANDIDATE | 閘門未全過 | WATCH 或 HOLD（依 status） |
-  | SELL_HALF | 持股，且建倉滿一年（registry.first_buy_date） | TRIM |
-  | SELL_HALF | 未滿一年 | HOLD |
-  | SELL_REVIEW | — | HOLD，`framework_notes` 註「賣出檢視待組合比較（M5）」 |
-  | HOLD | — | HOLD |
-  | NO_CHANGE | — | WATCH 或 HOLD（依 status） |
+    | 條件 | action |
+    |---|---|
+    | 三閘門全過，未持股 | BUY 候選 → 交完整分析（近期完整分析已看過可買價位仍未判 BUY → WATCH） |
+    | 三閘門全過，持股且權重 < 目標權重（權重或目標權重缺 → 不加碼） | ADD |
+    | 閘門未全過 | 未持股 WATCH；持股 HOLD |
+    | 持股已達目標權重 | HOLD |
+
+  - 賣出側（`review_jobs._sell_route`，只決定要不要交 HOLD_REVIEW；PRICE 本身不寫 TRIM，`writeback.PRICE_ACTIONS` 不含 TRIM）：
+
+    | 條件（持股） | 結果 |
+    |---|---|
+    | 現價 ≥ 荒謬級線 | HOLD，交 HOLD_REVIEW（第一年內也送；回寫端再擋價格類賣出） |
+    | 現價 ≥ IV_base 且建倉未滿一年 | HOLD，只停止加碼，不送 |
+    | 現價 ≥ 新 IV_base 但 < 登錄表上次 `sell_review_above`（P-25） | HOLD，只停止加碼，不送 |
+    | 其他現價 ≥ IV_base | HOLD，交 HOLD_REVIEW |
+
+  - `g10_still_valid` 為 false 或 `g9_contrarian` 空白 → `needs_full`，交完整分析，不回寫（P-63）。
 
 - **寫入**：`writeback.write_price_result(...)`。
   - 決策日誌：gate1/2/3、price、`buy_price_cap`、`price_to_cap`。

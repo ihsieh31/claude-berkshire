@@ -39,11 +39,12 @@ def test_connect_creates_parent_dirs_and_pragmas(tmp_path):
 
 
 def test_migrate_returns_version_and_is_idempotent(conn):
-    assert db.migrate(conn) == len(db.MIGRATIONS) == 2
-    assert db.migrate(conn) == 2
+    assert db.migrate(conn) == len(db.MIGRATIONS) == 3
+    assert db.migrate(conn) == 3
     rows = conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall()
-    assert [r[0] for r in rows] == [1, 2]
+    assert [r[0] for r in rows] == [1, 2, 3]
     assert "approvals" in _tables(conn)
+    assert "provenance" in {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
 
 
 def test_all_v1_tables_exist(conn):

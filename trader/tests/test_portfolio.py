@@ -81,7 +81,7 @@ def test_target_weight_falls_back_to_position_plan():
 
 def test_buy_limit_strictly_below_cap():
     lim = S.buy_limit(50.0, 60.0, 10)
-    assert lim == pytest.approx(50.05) and lim < 60.0
+    assert lim == pytest.approx(59.99) and lim < 60.0   # D04：round_down(上限×0.9999)
     # 報價＋滑價已到上限附近：限價仍嚴格低於上限（不得四捨五入到上限）
     lim = S.buy_limit(59.99, 60.0, 0)
     assert lim is not None and lim < 60.0
@@ -94,14 +94,11 @@ def test_buy_limit_rejects_bad_inputs():
     assert S.buy_limit(0, 60.0, 10) is None
 
 
-def test_gate_failures_uses_log_then_card_fallback():
+def test_gate_failures_uses_log():
+    # 只看決策日誌；日誌缺欄位不再退回訊號卡 auto_buy_gates（M6-D8-04，見 test_fix_F05）
     assert S.gate_failures(GATES, None) == []
     assert len(S.gate_failures({"gate1_not_deleted": True, "gate2_price_below_cap": True,
                                 "gate3_pass": False}, None)) == 1
-    # 日誌缺欄位 → 退回訊號卡 auto_buy_gates
-    card = {"auto_buy_gates": {"gate1_not_deleted": True, "gate2_price_below_cap": True,
-                               "gate3_questionnaire_pass": True}}
-    assert S.gate_failures({}, card) == []
     # placeholder 字串不算真
     assert S.gate_failures({"gate1_not_deleted": "true | false", "gate2_price_below_cap": True,
                             "gate3_pass": True}, None)
@@ -127,8 +124,8 @@ def test_plan_buys_new_position_sizes_first_tranche(conn):
     items = [_item("AAA-20261016-1", "AAA")]
     plans = S.plan_buys(conn, ASOF, items, {"AAA": 50.0}, {"AAA": 1e9}, 10)
     p = plans[0]
-    # 首批 50% × 10% × 100000 = 5000；限價 50.05 → 99 股
-    assert p["qty"] == 99 and p["limit_price"] == pytest.approx(50.05)
+    # 首批 50% × 10% × 100000 = 5000；股數依 收盤×(1+滑價)＝50.05 → 99 股；限價＝上限×0.9999 捨去＝59.99（D04）
+    assert p["qty"] == 99 and p["limit_price"] == pytest.approx(59.99)
     assert p["side"] == "BUY" and p["decision_id"] == "AAA-20261016-1"
     assert any("推論：缺 G8" in n for n in p["notes"])
 
@@ -157,9 +154,13 @@ def test_plan_buys_requires_quote_below_cap(conn):
 
 
 def test_plan_buys_adv_limits_amount(conn):
-    # ADV 1,000,000 美元 × 1% = 10,000 美元 上限；首批 5000 不受限，改把 ADV 壓到 100,000 → 上限 1000
-    plans = S.plan_buys(conn, ASOF, [_item("EEE-20261016-1", "EEE")], {"EEE": 50.0}, {"EEE": 100000}, 10)
-    assert plans[0]["qty"] == 19   # floor(1000 / 50.05)
+    # P-38 管整個部位（M6-D2-09）：ADV 500,000 × 1% = 5,000 → T 由 10% 夾到 5%，首批 50% → 2,500
+    plans = S.plan_buys(conn, ASOF, [_item("EEE-20261016-1", "EEE")], {"EEE": 50.0}, {"EEE": 500000}, 10)
+    assert plans[0]["qty"] == 49 and plans[0]["target_weight"] == pytest.approx(0.05)   # floor(2500 / 50.05)
+    assert any("P-38" in n for n in plans[0]["notes"])
+    # ADV 100,000 → 部位上限 1,000（1%）< 3% → 不建倉（P-33）
+    plans = S.plan_buys(conn, ASOF, [_item("EEF-20261016-1", "EEF")], {"EEF": 50.0}, {"EEF": 100000}, 10)
+    assert plans[0]["qty"] == 0 and "< 3%" in plans[0]["reason"]
 
 
 def test_plan_buys_daily_new_cap_and_ranking(conn):
@@ -242,10 +243,15 @@ def test_sell_cancels_open_buys_first(conn):
 
 
 def test_weight_overrun_under_one_year_only_noted(conn):
-    _pos(conn, "OV", 400, 50.0, "2026-06-01")          # 市值 20000 / 權益 100000 = 20% > 10%（B）
+    """D01：因上漲超過等級上限不賣（不分滿不滿一年），只記錄 weight_over_cap 並停止加碼。"""
+    _pos(conn, "OV", 400, 50.0, "2026-06-01")          # 市值 20000 / 權益 120000 = 16.7% > 10%（B）
     _reg(conn, "OV", "HOLDING", {"grade": "B"})
     plans = S.plan_sells(conn, ASOF, [], {"OV": 50.0})
-    assert plans[0]["qty"] == 0 and "未滿一年" in plans[0]["reason"]
+    assert len(plans) == 1 and plans[0]["qty"] == 0 and plans[0]["action"] == "HOLD"
+    assert "不賣" in plans[0]["reason"] and "只記錄" in plans[0]["reason"]
+    a = plans[0]["anomaly"]
+    assert a["kind"] == S.WEIGHT_OVER_CAP and a["cap"] == pytest.approx(0.10) and a["weight"] == pytest.approx(20000 / 120000, abs=1e-6)
+    assert a["full_review"] is False                    # ≤ 25%：不排完整複查
 
 
 def test_weight_overrun_with_grade_c_is_recorded_not_sold(conn):
@@ -256,11 +262,19 @@ def test_weight_overrun_with_grade_c_is_recorded_not_sold(conn):
 
 
 def test_weight_overrun_after_one_year_trims_to_cap(conn):
+    """D01：滿一年也不因上漲超過等級上限減碼；只有 user_hard_cap（制度類）才減，且只減超出部分（INSTITUTIONAL）。"""
     _pos(conn, "OV2", 400, 50.0, "2025-01-01")
     _reg(conn, "OV2", "HOLDING", {"grade": "B"})
     plans = S.plan_sells(conn, ASOF, [], {"OV2": 50.0})
-    # 權益 = 100000 ＋ 市值 20000 = 120000；上限 10% → 目標 240 股，賣 400 − 240 = 160
-    assert plans[0]["qty"] == 160 and plans[0]["limit_price"] is None
+    assert [p["qty"] for p in plans] == [0] and plans[0]["anomaly"]["kind"] == S.WEIGHT_OVER_CAP
+    plans = S.plan_sells(conn, ASOF, [], {"OV2": 50.0}, user_hard_cap=0.10)
+    # 權益 = 100000 ＋ 市值 20000 = 120000；硬上限 10% → 目標 240 股，賣 400 − 240 = 160
+    assert len(plans) == 1 and plans[0]["qty"] == 160 and plans[0]["limit_price"] is None
+    assert plans[0]["action"] == "TRIM" and plans[0]["reason_code"] == "INSTITUTIONAL"
+    assert "anomaly" not in plans[0]
+    # 硬上限高於目前權重 → 回到「只記錄」
+    plans = S.plan_sells(conn, ASOF, [], {"OV2": 50.0}, user_hard_cap=0.20)
+    assert [p["qty"] for p in plans] == [0] and plans[0]["anomaly"]["kind"] == S.WEIGHT_OVER_CAP
 
 
 # ---------------------------------------------------------------- plan_tranches / tick

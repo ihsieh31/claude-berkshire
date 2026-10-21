@@ -17,7 +17,8 @@ def hold(action="HOLD", cat=None, frac=None, stop=True, named=None):
                      {"q": "Q2", "answer": "是", "evidence": "測試"}],
             "action": action, "sell_category": cat, "trim_fraction": frac, "stop_adding": stop,
             "observe_until": "2027-04-16" if action == "HOLD" else None,
-            "falsified_assumption": named, "reason": "測試"}
+            "falsified_assumption": named, "external_drivers": [], "external_drivers_change_reason": None,
+            "reason": "測試"}
 
 
 def _holding(env, qty=100, first="2024-01-02"):
@@ -66,7 +67,7 @@ def test_holding_full_a_stop_goes_to_hold_review_and_keeps_registry(tmp_path):
     env.price_file("KO")
     env.add(env.job("KO", "FULL_A", 1))
     env.engine.run(RUN)
-    assert [r["job_type"] for r in env.rows()] == ["FULL_A", "HOLD_REVIEW"]
+    assert [r["job_type"] for r in env.rows()] == ["FULL_A", "FULL_A", "HOLD_REVIEW"]   # A3-M3B-01：持股停止先退回一次
     log = _last_log(env)
     assert log["action"] == "HOLD" and log["review_type"] == "HOLD_REVIEW" and log["stop_adding"] is True
     reg = json.loads(env.conn.execute("SELECT data FROM registry WHERE ticker='KO'").fetchone()["data"])
@@ -98,7 +99,10 @@ def test_holding_full_b_watch_then_business_sell_all(tmp_path):
                     .read_text(encoding="utf-8"))
     assert g8["self"]["ticker"] == "KO" and g8["holdings"] == [] and g8["excluded_self"] == "KO"
     reg = json.loads(env.conn.execute("SELECT data FROM registry WHERE ticker='KO'").fetchone()["data"])
-    assert reg["thesis_file"] == "theses/KO_2024-01-02.md" and reg["first_buy_date"] == "2024-01-02"
+    # D16：持股完整複查另立新版論點檔（predecessor 指舊檔），舊檔原封不動
+    assert reg["thesis_file"] == f"theses/KO_{ASOF}_v2.md" and reg["first_buy_date"] == "2024-01-02"
+    assert "predecessor: theses/KO_2024-01-02.md" in (env.paths.state / reg["thesis_file"]).read_text(encoding="utf-8")
+    assert (env.paths.theses / "KO_2024-01-02.md").is_file()
     plans = S.plan_sells(env.conn, ASOF, S.load_decisions(env.conn, ASOF), {"KO": 60.0})
     assert plans[0]["qty"] == 100 and plans[0]["action"] == "SELL_ALL"
 
@@ -109,7 +113,7 @@ def test_unverified_sell_twice_becomes_hold_and_anomaly(tmp_path):
     env.price_file("KO")
     env.add(env.job("KO", "FULL_A", 1))
     env.engine.run(RUN)
-    assert [r["job_type"] for r in env.rows()] == ["FULL_A", "HOLD_REVIEW", "HOLD_REVIEW"]   # 退回一次
+    assert [r["job_type"] for r in env.rows()] == ["FULL_A", "FULL_A", "HOLD_REVIEW", "HOLD_REVIEW"]   # 退回一次（FULL_A 持股停止另退回一次，A3-M3B-01）
     log = _last_log(env)
     assert log["action"] == "HOLD" and log["stop_adding"] is True and "覆核兩次未通過" in log["framework_notes"][0]
     a = env.conn.execute("SELECT kind, status FROM anomalies").fetchone()
@@ -129,16 +133,29 @@ def test_switch_category_goes_to_human(tmp_path):
 # ---------------------------------------------------------------- 下單規劃
 
 def test_trim_fraction_and_stop_adding(tmp_path):
-    env = make_env(tmp_path, {"FULL_A": full_a(stopped=True), "HOLD_REVIEW": hold("TRIM", "估值", 0.25)})
+    h = hold("TRIM", "估值", 0.25)
+    h["path"].append({"q": "Q3c", "answer": "是", "evidence": "頂級複利型"})   # D03：普通估值 TRIM 無 G8 來源改 HOLD
+    # 估值類 TRIM 需完整分析走到估值：走 FULL_B 非 BUY（WATCH）的合法路徑。
+    # 不用 FULL_A 停止＋手放 cap_result——那正是 M5_D2-08 要擋的情境（沒走到估值不得取 IV_base）。
+    fb = full_b("WATCH")   # A3-M3D-02：頂級複利型須完整分析訊號卡 p08_final.quality＝優
+    fb["files"] = {**fb["files"], "KO/signal_card.json": json.dumps(
+        {**json.loads(fb["files"]["KO/signal_card.json"]), "p08_final": {"items_with_data": 5, "passed": 4,
+                                                                         "rate": 80.0, "quality": "優"}},
+        ensure_ascii=False)}
+    env = make_env(tmp_path, {"FULL_A": full_a(), "FULL_B": fb, "HOLD_REVIEW": h})
     _holding(env)
-    env.price_file("KO")
-    # 估值類需要 IV_base：放一份 cap_result（價格 60.5 ≥ IV_base 50）
-    (env.paths.work / RUN / "KO" / "cap_result.json").write_text(json.dumps({"IV_base": 50.0}), encoding="utf-8")
+    # 估值類需價格 ≥ IV_base：IV_base 由 FULL_B 的 cap_calc 算出（範例輸入約 89.53），價格檔改 95
+    env.price_file("KO").write_text(json.dumps({"price": 95.0, "price_date": "2026-10-15"}), encoding="utf-8")
     env.add(env.job("KO", "FULL_A", 1))
     env.engine.run(RUN)
+    assert [r["job_type"] for r in env.rows()] == ["FULL_A", "FULL_B", "HOLD_REVIEW"]   # 覆核一次通過
+    hr = env.by_type("HOLD_REVIEW")[0]
+    assert json.loads(hr["params"])["full_stage"] == "B"
+    iv = json.loads((env.paths.work / RUN / "KO" / "cap_result.json").read_text(encoding="utf-8"))["IV_base"]
+    assert iv <= 95.0
     log = _last_log(env)
     assert log["action"] == "TRIM" and log["trim_fraction"] == 0.25 and log["stop_adding"] is True
-    plans = S.plan_sells(env.conn, ASOF, S.load_decisions(env.conn, ASOF), {"KO": 60.0})
+    plans = S.plan_sells(env.conn, ASOF, S.load_decisions(env.conn, ASOF), {"KO": 95.0})
     assert plans[0]["qty"] == 25
     assert S.add_blocked(env.conn, "KO", ASOF)
 

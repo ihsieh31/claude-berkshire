@@ -330,7 +330,7 @@ function lineChart(el, points) {
     const ex = isNum(p.account) && isNum(p.spy) ? p.account - p.spy : null;
     tip.innerHTML = `<div class="d">${esc(p.date)}</div>
       <div class="row"><span>帳戶</span><span class="num ${cls(p.account - 100)}">${fmtNum(p.account)}</span></div>
-      <div class="row"><span class="muted">SPY</span><span class="num">${fmtNum(p.spy)}</span></div>
+      <div class="row"><span class="muted">${esc(state.bench || "SPY")}</span><span class="num">${fmtNum(p.spy)}</span></div>
       <div class="row"><span class="muted">差距</span><span class="num ${cls(ex)}">${isNum(ex) ? (ex > 0 ? "+" : "") + ex.toFixed(2) : "—"}</span></div>`;
   };
   svg.onmouseleave = () => { tip.style.display = "none"; hov.setAttribute("visibility", "hidden"); };
@@ -360,6 +360,9 @@ pages.overview = async () => {
     view.innerHTML = `${banner}${pageHead("總覽")}<div class="panel"><div class="empty">尚無淨值資料：第一次 <code>trader daily</code> 之後就會出現。</div></div>`;
     return;
   }
+  // 基準代號取自設定 account.benchmark（A3-M8C2-10）
+  state.bench = s.bench || "SPY";
+  const bn = esc(state.bench);
   const kpi = (k, v, sub = "", c = "", hero = false) => `<div class="kpi"><div class="k">${k}</div><div class="v ${hero ? "hero" : ""} ${c}">${v}</div><div class="s">${sub}</div></div>`;
   const hs = holds.slice().sort((p, q) => q.value - p.value);
   const maxW = Math.max(...hs.map((h) => h.weight || 0), 0.0001);
@@ -374,16 +377,21 @@ pages.overview = async () => {
   if (a.n_pending) todo.push(`<div class="row"><a href="#approvals">待同意分析</a><span class="v">${esc(a.n_pending)} 檔</span></div>`);
   if (s.open_anomalies) todo.push(`<div class="row"><a href="#anomalies">未結異常</a><span class="v">${esc(s.open_anomalies)} 筆</span></div>`);
   if (s.missing_close.length) todo.push(`<div class="row"><span>缺收盤（以成本估）</span><span class="v">${esc(s.missing_close.join("、"))}</span></div>`);
+  // 最大相關群（M8-D10-07）
+  const grp = isNum(s.max_group_weight) && s.max_group
+    ? `<div class="row"><span>最大相關群<div class="sub">${esc(s.max_group.members.join("、"))}｜${esc(s.max_group.variables.join("、"))}</div></span><span class="v">${fmtPct(s.max_group_weight, 1, false)}</span></div>` : "";
+  const unk = s.unknown_drivers && s.unknown_drivers.length
+    ? `<div class="row"><span>外部變數未知</span><span class="v">${esc(s.unknown_drivers.join("、"))}</span></div>` : "";
   view.innerHTML = `${banner}
   ${pageHead("總覽", `${esc(s.first_date)} 起 · 資料至 ${esc(s.as_of)}`)}
   <div class="kpis">
-    ${kpi("淨值", fmtUSD(s.nav), `投入 ${fmtUSD(s.deposits)}`, "", true)}
+    ${kpi("淨值", fmtUSD(s.nav), `投入 ${fmtUSD(s.deposits)}` + (s.pending_deposits ? `（待入帳 ${fmtUSD(s.pending_deposits)}）` : ""), "", true)}
     ${kpi("帳戶報酬", fmtPct(s.return), "時間加權", cls(s.return))}
-    ${kpi("SPY 同期", fmtPct(s.spy_return), "含股利", cls(s.spy_return))}
-    ${kpi("超額", fmtPP(s.excess_pp), "帳戶 − SPY", cls(s.excess_pp))}
+    ${kpi(`${bn} 同期`, fmtPct(s.spy_return), "含股利", cls(s.spy_return))}
+    ${kpi("超額", fmtPP(s.excess_pp), `帳戶 − ${bn}`, cls(s.excess_pp))}
     ${kpi("現金比", fmtPct(s.cash_ratio, 1, false), `${esc(s.n_positions ?? hs.length)} 檔持股`)}
   </div>
-  ${panel(`<span class="legend"><span><i style="border-color:${s.return < 0 ? "var(--down)" : "var(--up)"}"></i>帳戶</span><span><i class="dash" style="border-color:var(--spy)"></i>SPY</span><span class="muted">起點 = 100</span></span>`,
+  ${panel(`<span class="legend"><span><i style="border-color:${s.return < 0 ? "var(--down)" : "var(--up)"}"></i>帳戶</span><span><i class="dash" style="border-color:var(--spy)"></i>${bn}</span><span class="muted">起點 = 100</span></span>`,
     '<div class="chart" id="chart"></div>',
     `<div class="seg" id="rng">${["1M", "3M", "YTD", "ALL"].map((r) => `<button data-r="${r}" class="${r === state.range ? "on" : ""}">${r === "ALL" ? "全部" : r}</button>`).join("")}</div>`)}
   <div class="grid g-main" style="margin-top:16px">
@@ -396,7 +404,7 @@ pages.overview = async () => {
         <div class="row"><span>股利（含應收）</span><span class="v ${cls(s.pnl.dividends)}">${fmtUSD(s.pnl.dividends, true)}</span></div>
         <div class="row"><span>已實現及其他<div class="sub">賣出損益、手續費、調帳</div></span><span class="v ${cls(s.pnl.realized_other)}">${fmtUSD(s.pnl.realized_other, true)}</span></div></div>`, "", false)}
       ${panel("配置", `<div class="alloc">${alloc.map((p) => `<span style="width:${(p.v * 100).toFixed(2)}%;background:${p.c}" title="${esc(p.k)}"></span>`).join("")}</div>
-        <div class="list">${alloc.map((p) => `<div class="row"><span><span class="sw" style="background:${p.c}"></span>${esc(p.k)}</span><span class="v">${fmtPct(p.v, 1, false)}</span></div>`).join("")}</div>`, `<span class="sub tnum">${fmtUSD(s.cash)} 現金</span>`, false)}
+        <div class="list">${alloc.map((p) => `<div class="row"><span><span class="sw" style="background:${p.c}"></span>${esc(p.k)}</span><span class="v">${fmtPct(p.v, 1, false)}</span></div>`).join("")}${grp}${unk}</div>`, `<span class="sub tnum">${fmtUSD(s.cash)} 現金</span>`, false)}
       ${todo.length ? panel("待辦", `<div class="list">${todo.join("")}</div>`, "", false) : ""}
     </div>
   </div>`;
@@ -412,7 +420,7 @@ pages.overview = async () => {
 };
 
 pages.holdings = async () => {
-  const hs = await api("/api/holdings");
+  const [hs, wl] = await Promise.all([api("/api/holdings"), api("/api/watchlist")]);
   const bp = (b) => (b && typeof b === "object" ? esc(`剩 ${b.tranches_left ?? "?"} 批`) : "—");
   const total = hs.reduce((a, h) => a + (h.value || 0), 0);
   const rows = hs.map((h) => `<tr><td>${tkTag(h.ticker)} <span class="muted" style="font-size:11.5px">${esc(h.grade || "")}</span></td>
@@ -422,10 +430,17 @@ pages.holdings = async () => {
       <td>${bp(h.build_plan)}${isNum(h.target_weight) ? `<div class="sub">目標 ${fmtPct(h.target_weight, 1, false)}</div>` : ""}</td>
       <td class="wrap">${esc(h.thesis_one_liner || "—")}</td>
       <td class="num">${esc(h.next_kill_check || "—")}<div class="sub">完整 ${esc(h.next_full_review_due || "—")}</div></td>
-      <td>${h.paused ? '<span class="pill bad">暫停交易</span> ' : ""}${h.add_blocked ? `<span class="pill warn" title="${esc(h.add_blocked)}">停止加碼</span>` : ""}${!h.paused && !h.add_blocked ? '<span class="pill">正常</span>' : ""}</td></tr>`).join("");
+      <td>${h.paused ? `<span class="pill bad" title="${esc((h.pause_reasons || []).join("、") || "見異常頁")}">暫停交易</span> ` : ""}${h.add_blocked ? `<span class="pill warn" title="${esc(h.add_blocked)}">停止加碼</span>` : ""}${!h.paused && !h.add_blocked ? '<span class="pill">正常</span>' : ""}</td></tr>`).join("");
   view.innerHTML = pageHead("持股", `${hs.length} 檔 · 市值 ${fmtUSD(total)}`, '<a class="btn sm" href="/api/export/holdings.csv">匯出 CSV</a>') +
     panel("", tbl(`<th>代號</th><th class="n">股數</th><th class="n">成本</th><th class="n">現價</th><th class="n">市值</th><th class="n">權重</th><th class="n">報酬</th>
-    <th class="n">買價上限</th><th class="n">賣出檢視線</th><th class="n">荒謬級線</th><th>建倉</th><th>論點</th><th>下次檢查</th><th>狀態</th>`, rows, "尚無持股", 14));
+    <th class="n">買價上限</th><th class="n">賣出檢視線</th><th class="n">荒謬級線</th><th>建倉</th><th>論點</th><th>下次檢查</th><th>狀態</th>`, rows, "尚無持股", 14)) +
+    // 登錄表非持股列：觀察名單的買價上限、排除名單的到期日（M8-D5-02）
+    `<div style="margin-top:16px">${panel("登錄表（非持股）", tbl(`<th>代號</th><th>狀態</th><th>等級</th><th class="n">最近收盤</th><th class="n">買價上限</th><th class="n">賣出檢視線</th><th>最近完整分析</th><th>排除至</th><th>下次完整複查</th><th>排除依據</th>`,
+      wl.map((w) => `<tr><td>${tkTag(w.ticker)}</td><td><span class="pill">${esc(w.status)}</span></td><td>${esc(w.grade || "—")}</td>
+        <td class="n">${fmtNum(w.price)}</td><td class="n">${fmtNum(w.auto_buy_cap)}</td><td class="n">${fmtNum(w.sell_review_above)}</td>
+        <td class="num muted">${esc(w.last_full_review_date || "—")}</td><td class="num">${esc(w.exclude_until || "—")}</td>
+        <td class="num muted">${esc(w.next_full_review_due || "—")}</td><td class="wrap">${esc(typeof w.reject_basis === "object" && w.reject_basis ? JSON.stringify(w.reject_basis) : w.reject_basis || "")}</td></tr>`).join(""),
+      "登錄表沒有非持股的代號", 10), '<a class="btn sm" href="/api/export/registry.csv">匯出 CSV（非持股）</a>')}</div>`;
 };
 
 pages.trades = async () => {
@@ -446,14 +461,14 @@ pages.trades = async () => {
     const v = r[c[0]];
     if (c[2]) return `<td class="n ${c[0] === "amount" ? cls(v) : ""}">${c[2] === 1 ? esc(v) : fmtNum(v, c[2])}</td>`;
     if (c[0] === "ticker") return `<td>${tkTag(v)}</td>`;
-    if (c[0] === "side") return `<td class="${sideCls(v)}" style="font-weight:500">${esc(v ?? "")}</td>`;
+    if (c[0] === "side") return `<td class="${sideCls(v)}" style="font-weight:500">${esc(v ?? "")}${r.manual ? ' <span class="pill">人工</span>' : ""}</td>`;
     if (/date$/.test(c[0])) return `<td class="num muted">${esc(v ?? "")}</td>`;
     return `<td class="${c[0] === "note" || c[0] === "cancel_reason" ? "wrap" : ""}">${esc(v ?? "")}</td>`;
   };
   const rows = (t[state.tab] || []).map((r) => `<tr>${cols[state.tab].map((c) => cell(r, c)).join("")}</tr>`).join("");
   view.innerHTML = pageHead("交易紀錄", "", `<input id="f-t" placeholder="代號" value="${esc(state.tf.ticker || "")}" size="7">
     <input id="f-s" type="date" value="${esc(state.tf.start || "")}"><input id="f-e" type="date" value="${esc(state.tf.end || "")}">
-    <button class="btn sm" id="f-go">篩選</button><a class="btn sm" href="/api/export/${state.tab}.csv">匯出 CSV</a>`) +
+    <button class="btn sm" id="f-go">篩選</button><a class="btn sm" href="/api/export/${state.tab}.csv">匯出 CSV（全部）</a>`) +
     `<section class="panel"><div class="tabs">${Object.entries(TABS).map(([k, v]) => `<button data-k="${k}" class="${k === state.tab ? "on" : ""}">${v}<span class="c">${(t[k] || []).length}</span></button>`).join("")}</div>
     ${tbl(cols[state.tab].map((c) => `<th class="${c[2] ? "n" : ""}">${c[1]}</th>`).join(""), rows, "沒有資料", cols[state.tab].length)}</section>`;
   $(".tabs").onclick = (e) => { const b = e.target.closest("button"); if (b) { state.tab = b.dataset.k; pages.trades(); } };
@@ -467,13 +482,15 @@ pages.analyses = async () => {
   const [rows, usage] = await Promise.all([api(`/api/analyses${q}`), api("/api/usage")]);
   const dr = rows.map((r) => `<tr class="click" data-id="${esc(r.decision_id)}"><td class="num muted">${esc(r.date)}</td><td>${tkTag(r.ticker)}</td>
     <td><span class="pill ${ACTION_PILL[r.action] ?? ""}">${esc(r.action || "—")}</span></td><td class="muted">${esc(r.review_type || "完整分析")}</td>
-    <td class="num">${esc(r.stopped_at_gate || "—")}</td><td>${esc(r.grade || "—")}</td><td class="wrap">${esc(r.reason || r.reason_code || "")}</td></tr>`).join("");
-  const ur = usage.map((u) => `<tr><td class="num">${esc(u.month)}</td><td>${esc({ strong: "強", medium: "中", weak: "弱" }[u.tier] || u.tier)}</td><td class="n">${esc(u.calls)}</td>
-    <td class="n">${fmtTok(u.input_tokens)}</td><td class="n">${fmtTok(u.output_tokens)}</td><td class="n">${fmtNum(u.latency_s / 60, 1)} 分</td></tr>`).join("");
-  view.innerHTML = pageHead("分析紀錄", `${rows.length} 筆決策 · 點一列看報告`, `<input id="a-t" placeholder="代號" value="${esc(state.af || "")}" size="7"><button class="btn sm" id="a-go">篩選</button>
-    <a class="btn sm" href="/api/export/analyses.csv">匯出 CSV</a>`) +
+    <td class="num">${esc(r.stopped_at_gate || "—")}</td><td>${esc(r.grade || "—")}</td><td class="wrap">${(r.framework_notes || []).length ? `<span class="pill warn" title="${esc(r.framework_notes.join("\n"))}">框架調整</span> ` : ""}${esc(r.reason || r.reason_code || "")}</td></tr>`).join("");
+  // 用量依後端分列（M8-D5-07）：不回報實際用量的後端（hark_queue 等）標「估算」
+  const ur = usage.map((u) => `<tr><td class="num">${esc(u.month)}</td><td>${esc({ strong: "強", medium: "中", weak: "弱" }[u.tier] || u.tier)}</td>
+    <td>${esc(u.backend || "—")}${u.estimated ? ' <span class="pill warn">估算</span>' : ""}</td><td class="n">${esc(u.calls)}${u.failed ? ` <span class="muted">（失敗 ${esc(u.failed)}）</span>` : ""}</td>
+    <td class="n">${fmtTok(u.input_tokens)}</td><td class="n">${fmtTok(u.output_tokens)}</td><td class="n">${u.estimated ? "—" : `$${fmtNum(u.cost_usd, 2)}`}</td><td class="n">${fmtNum(u.latency_s / 60, 1)} 分</td></tr>`).join("");
+  view.innerHTML = pageHead("分析紀錄", `${rows.length >= 200 ? "最近 200 筆決策（完整見匯出）" : `${rows.length} 筆決策`} · 點一列看報告`, `<input id="a-t" placeholder="代號" value="${esc(state.af || "")}" size="7"><button class="btn sm" id="a-go">篩選</button>
+    <a class="btn sm" href="/api/export/analyses.csv">匯出 CSV（全部）</a>`) +
     `<div class="stack">${panel("決策日誌", tbl("<th>日期</th><th>代號</th><th>動作</th><th>類型</th><th>停在</th><th>等級</th><th>理由</th>", dr, "尚無決策", 7))}
-    ${panel("模型用量（每月）", tbl('<th>月份</th><th>等級</th><th class="n">呼叫</th><th class="n">輸入</th><th class="n">輸出</th><th class="n">耗時</th>', ur, "尚無呼叫紀錄", 6))}</div>`;
+    ${panel("模型用量（每月）", tbl('<th>月份</th><th>等級</th><th>後端</th><th class="n">呼叫</th><th class="n">輸入</th><th class="n">輸出</th><th class="n">費用</th><th class="n">耗時</th>', ur, "尚無呼叫紀錄", 8))}</div>`;
   $("#a-go").onclick = () => { state.af = $("#a-t").value.trim().toUpperCase(); pages.analyses(); };
   view.querySelectorAll("tr.click").forEach((tr) => (tr.onclick = () => { history.replaceState(null, "", `#analyses/${encodeURIComponent(tr.dataset.id)}`); openReport(tr.dataset.id); }));
 };
@@ -489,6 +506,7 @@ async function openReport(id) {
   d.innerHTML = `<button class="btn sm close">關閉</button>
     <div class="sub mono">${esc(r.decision_id)}</div><h1>${esc(r.ticker)} <span class="muted" style="font-size:22px">· ${esc(r.log.action || "")}</span></h1>
     ${card.one_liner ? `<p style="font:16px/1.6 var(--serif);color:var(--ink-2);margin:0 0 24px">${esc(card.one_liner)}</p>` : ""}
+    ${(r.log.framework_notes || []).length ? `<div class="card" style="margin-bottom:20px"><div class="sub">框架調整（模型結論被框架改寫的理由）</div><ul>${r.log.framework_notes.map((n) => `<li>${esc(typeof n === "object" ? JSON.stringify(n) : n)}</li>`).join("")}</ul></div>` : ""}
     ${keys.length ? `<details class="card" style="margin-bottom:28px"><summary>訊號卡（${keys.length} 欄）</summary><div class="card-kv" style="margin-top:16px">${keys.map((k) => `<div>${esc(k)}</div><div>${esc(typeof card[k] === "object" ? JSON.stringify(card[k]) : card[k])}</div>`).join("")}</div></details>` : ""}
     ${r.report_md ? `<div class="sub mono">${esc(r.report_file)}</div><div class="md">${md(r.report_md)}</div>` : '<div class="empty">此決策沒有報告檔（例如停在早期關卡、或為觸發檢查）。</div>'}`;
   $(".close", d).onclick = closeDrawer;
@@ -504,22 +522,46 @@ pages.approvals = async () => {
   const s = a.summary;
   const items = a.items;
   const st = { pending: ["待同意", "warn"], deferred: ["延後", ""], approved: [a.running ? "執行中" : "已同意，等待執行", "ok"] };
-  // 執行中時每 10 秒自動更新，跑完的項目會自動從清單消失（結果在「分析」頁）
+  // 執行中時每 10 秒自動更新，跑完的項目會自動從清單消失（結果在「分析」頁；有失敗工作的留在清單，見註記）
   clearTimeout(pages.approvals._t);
   if (a.running) pages.approvals._t = setTimeout(() => { if ((location.hash || "") === "#approvals") { pages.approvals(); refreshBadge(); } }, 10000);
   const rows = items.map((x) => `<tr><td>${x.status === "approved" ? "" : `<input type="checkbox" data-id="${esc(x.approval_id)}" data-st="${esc(x.status)}">`}</td>
     <td>${tkTag(x.ticker)}${x.holding ? ' <span class="pill">持股</span>' : ""}</td>
     <td><span class="pill ${st[x.status]?.[1] ?? ""}">${esc(st[x.status]?.[0] || x.status)}</span></td><td class="num">${esc(x.job_type)}</td>
-    <td class="num muted">${esc(x.asof)}</td><td class="wrap">${esc(x.reason || "")}</td><td class="num muted">${localTime(x.created_at)}</td></tr>`).join("");
+    <td class="num muted">${esc(x.asof)}</td><td class="wrap">${esc(x.reason || "")}${x.note ? `<div class="sub">${esc(x.note)}</div>` : ""}</td><td class="num muted">${localTime(x.created_at)}</td></tr>`).join("");
   const kpi = (k, v, sub = "") => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const pend = items.filter((x) => x.status === "pending");   // D54：一鍵同意只送畫面上這批 pending 編號
+  const waiting = s.n_runnable > 0;   // 只剩失敗工作的已同意列不算（M8-D5-04，與排程同條件）
+  const pt = s.per_ticker;
+  const basis = pt.samples ? `${esc(pt.samples)} 次樣本${pt.backends && pt.backends.length ? `（${esc(pt.backends.join("、"))}）` : ""}` : "尚無樣本";
+  const b = a.budget;
+  const budget = b ? `本 run 預算上限：呼叫 ${esc(b.max_llm_calls_per_run || "不限")} 次、費用 ${b.max_cost_usd_per_run ? `$${esc(b.max_cost_usd_per_run)}` : "不限"}` +
+    (b.max_llm_calls_per_day || b.max_cost_usd_per_day ? `；每日 ${esc(b.max_llm_calls_per_day || "不限")} 次、${b.max_cost_usd_per_day ? `$${esc(b.max_cost_usd_per_day)}` : "不限"}` : "") : "";
+  // 上次執行（M8-D5-04）
+  const lr = a.last_run;
+  let last = "";
+  if (lr) {
+    const res = lr.finished_at
+      ? (lr.exit_code ? `<span class="pill bad">有失敗</span> 見異常頁` : '<span class="pill ok">完成</span>') +
+        Object.entries(lr.runs || {}).map(([k, v]) => ` · ${esc(k)}：${esc(v.status)}${v.failed ? `（失敗 ${esc(v.failed)}）` : ""}${v.pending ? `（待執行 ${esc(v.pending)}）` : ""}`).join("") +
+        (lr.error ? ` · ${esc(lr.error)}` : "")
+      : lr.ended_without_result ? '<span class="pill bad">行程已結束但沒有寫結果</span>（可能一啟動就失敗）' : '<span class="pill ok">執行中</span>';
+    last = `<div class="sub" style="margin:-4px 0 20px">上次執行強模型分析：${localTime(lr.started_at)}${lr.finished_at ? ` → ${localTime(lr.finished_at)}` : ""} · ${res} · log：<code>${esc(lr.log || "state/logs/run_approved.log")}</code></div>`;
+  }
+  // 預算暫停的 run（D44：不自動續跑，由你按續跑或放棄）
+  const pr = (a.paused_runs || []).map((r) => `<tr><td class="num">${esc(r.run_id)}</td><td>${esc(r.kind)}</td><td class="num muted">${esc(r.asof)}</td>
+    <td class="num">${esc(Object.entries(r.summary || {}).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join("、"))}</td>
+    <td style="white-space:nowrap"><button class="btn sm" data-resume="${esc(r.run_id)}">續跑</button> <button class="btn ghost sm danger" data-abandon="${esc(r.run_id)}">放棄</button></td></tr>`).join("");
   view.innerHTML = pageHead("待同意", "強模型分析需你同意後才執行", a.running ? '<span class="pill ok">強模型分析執行中</span>' : "") +
     `<div class="kpis" style="grid-template-columns:repeat(4,1fr)">
-      ${kpi("待同意", `${esc(s.n_pending)} 檔`)}${kpi("預估輸入", fmtTok(s.est_input_tokens), `輸出 ${fmtTok(s.est_output_tokens)}`)}
-      ${kpi("預估時間", `${fmtNum(s.est_minutes, 0)} 分`)}${kpi("每檔估算依據", esc(s.per_ticker.basis), s.per_ticker.samples ? `${esc(s.per_ticker.samples)} 次樣本` : "尚無樣本")}
-    </div><div class="sub" style="margin:-4px 0 20px">${esc(s.note)}</div>` +
+      ${kpi("待同意", `${esc(s.n_pending)} 檔`)}${kpi("預估輸入", fmtTok(s.est_input_tokens), `輸出 ${fmtTok(s.est_output_tokens)}${s.est_input_tokens_max ? ` · 含可能退回最多 ${fmtTok(s.est_input_tokens_max)}` : ""}`)}
+      ${kpi("預估時間", `${fmtNum(s.est_minutes, 0)} 分`, s.est_minutes_max ? `含可能退回最多 ${fmtNum(s.est_minutes_max, 0)} 分` : "")}${kpi("每檔估算依據", esc(pt.basis), basis)}
+    </div><div class="sub" style="margin:-4px 0 ${last ? 8 : 20}px">${esc(s.note)}${budget ? `。${budget}` : ""}</div>${last}` +
     panel("清單", tbl('<th style="width:36px"></th><th>代號</th><th>狀態</th><th>工作</th><th>資料日</th><th>觸發原因</th><th>建立</th>', rows, "沒有等待中的項目", 7),
       `<button class="btn ghost sm" id="df-sel" disabled>延後所選</button><button class="btn ghost sm danger" id="rj-sel" disabled>拒絕所選</button>
-       <button class="btn sm" id="ap-sel" disabled>同意所選</button><button class="btn primary sm" id="ap-all" ${s.n_pending ? "" : "disabled"}>全部同意（${esc(s.n_pending)}）</button>`);
+       <button class="btn sm" id="ap-sel" disabled>同意所選</button><button class="btn primary sm" id="ap-all" ${pend.length ? "" : "disabled"}>全部同意（${esc(pend.length)}）</button>
+       ${waiting && !a.running ? '<button class="btn sm" id="ap-run">執行已同意</button>' : ""}`) +
+    (pr ? `<div style="margin-top:16px">${panel("預算暫停的分析", tbl("<th>run</th><th>類型</th><th>資料日</th><th>工作</th><th></th>", pr, "", 5))}</div>` : "");
   const sel = () => [...view.querySelectorAll("input[type=checkbox]:checked")];
   const refreshBtns = () => {
     const c = sel();
@@ -530,30 +572,43 @@ pages.approvals = async () => {
   const ids = () => sel().map((i) => Number(i.dataset.id));
   const act = async (fn) => { try { await fn(); } catch (e) { toast(`失敗：${e.message}`); } await pages.approvals(); refreshBadge(); };
   $("#ap-all").onclick = async () => {
-    const c = await confirmDialog(`同意以強模型分析 ${s.n_pending} 檔？`, `${s.label || ""}。延後的項目不包含在內。請先確認 Claude 額度足夠。`, { okText: "同意並執行" });
-    if (c.ok) act(async () => { const r = await post("/api/approvals/approve", { all: true, via: "web" }); toast(r.started ? "已同意，背景執行中" : r.note || "已同意"); });
+    const list = pend.map((x) => x.ticker).join("、");
+    const c = await confirmDialog(`同意以強模型分析 ${pend.length} 檔？`, `${list}。${s.label || ""}。延後的項目不包含在內。請先確認 Claude 額度足夠。`, { okText: "同意並執行" });
+    if (c.ok) act(async () => { const r = await post("/api/approvals/approve", { ids: pend.map((x) => x.approval_id), via: "web" }); toast(r.started ? "已同意，背景執行中" : r.note || "已同意"); });
   };
   $("#ap-sel").onclick = async () => {
     const c = await confirmDialog(`同意所選 ${ids().length} 檔？`, "同意後立即在背景執行（含之後可能的 RED_TEAM）。", { okText: "同意並執行" });
     if (c.ok) act(async () => { const r = await post("/api/approvals/approve", { ids: ids(), via: "web" }); toast(r.started ? "已同意，背景執行中" : r.note || "已同意"); });
   };
+  if ($("#ap-run")) $("#ap-run").onclick = () => act(async () => { await post("/api/approvals/run", {}); toast("背景執行中"); });
   $("#df-sel").onclick = () => act(async () => { await post("/api/approvals/defer", { ids: ids(), via: "web" }); toast("已延後"); });
   $("#rj-sel").onclick = async () => {
     const c = await confirmDialog(`拒絕所選 ${ids().length} 檔？`, "該檔記為 NO_ACTION／MISSING_DATA，下次觸發時再排。", { okText: "拒絕", danger: true, note: true });
     if (c.ok) act(async () => { await post("/api/approvals/reject", { ids: ids(), via: "web", note: c.note || null }); toast("已拒絕"); });
   };
+  view.querySelectorAll("[data-resume]").forEach((bt) => (bt.onclick = async () => {
+    const c = await confirmDialog(`續跑 ${bt.dataset.resume}？`, "會呼叫模型、花費額度；仍受預算上限約束（用完會再暫停）。", { okText: "續跑" });
+    if (c.ok) act(async () => { await post("/api/runs/resume", { run_id: bt.dataset.resume }); toast("已在背景續跑"); });
+  }));
+  view.querySelectorAll("[data-abandon]").forEach((bt) => (bt.onclick = async () => {
+    const c = await confirmDialog(`放棄 ${bt.dataset.abandon}？`, "未完成的工作改為跳過、不呼叫模型、不寫決策（持股維持現狀）；之後不能續跑。", { okText: "放棄", danger: true, note: true });
+    if (c.ok) act(async () => { await post("/api/runs/abandon", { run_id: bt.dataset.abandon, note: c.note || null }); toast("已放棄"); });
+  }));
 };
 
 pages.anomalies = async () => {
   const a = await api("/api/anomalies");
   const detail = (d) => { try { const j = JSON.parse(d); return esc(Object.entries(j).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("；")); } catch { return esc(d); } };
-  const r1 = a.open.map((x) => `<tr><td class="num muted">${esc(x.anomaly_id)}</td><td>${tkTag(x.ticker)}</td><td>${esc(x.kind)}</td>
-    <td>${x.pause_trading ? '<span class="pill bad">暫停</span>' : '<span class="pill">否</span>'}</td><td class="wrap">${detail(x.detail)}</td><td class="num muted">${esc(String(x.created_at).slice(0, 10))}</td></tr>`).join("");
+  // 類型中文名、意思與下一步（M8-D5-05）；沒有專屬說明的類型才用帳本類通用說明
+  const r1 = a.open.map((x) => `<tr><td class="num muted">${esc(x.anomaly_id)}</td><td>${tkTag(x.ticker)}</td>
+    <td>${esc(x.kind_name || x.kind)}${x.kind_name ? `<div class="sub mono">${esc(x.kind)}</div>` : ""}</td>
+    <td>${x.pause_trading ? '<span class="pill bad">暫停</span>' : '<span class="pill">否</span>'}</td>
+    <td class="wrap">${x.meaning ? `<div>${esc(x.meaning)}</div>` : ""}<div class="sub">${detail(x.detail)}</div>
+      <div class="sub" style="margin-top:4px">處理：${esc(x.hint || a.ledger_help || "")}</div></td><td class="num muted">${esc(String(x.created_at).slice(0, 10))}</td></tr>`).join("");
   const r2 = a.pending_corp_actions.map((x) => `<tr><td class="num muted">${esc(x.effective_date)}</td><td>${tkTag(x.ticker)}</td><td>${esc(x.action_type)}</td>
-    <td class="n">${fmtNum(x.ratio_new_per_old, 4)}</td><td class="n">${fmtNum(x.cash_per_share, 4)}</td><td>${esc(x.new_ticker || "—")}</td><td><span class="pill warn">${esc(x.status)}</span></td></tr>`).join("");
+    <td class="n">${fmtNum(x.ratio_new_per_old, 4)}</td><td class="n">${fmtNum(x.cash_per_share, 4)}</td><td>${esc(x.new_ticker || "—")}</td><td><span class="pill warn">${esc(x.status)}</span>${x.hint ? `<div class="sub wrap">${esc(x.hint)}</div>` : ""}</td></tr>`).join("");
   view.innerHTML = pageHead("異常", `${a.open.length} 筆未結 · ${a.pending_corp_actions.length} 筆公司行動待處理`) +
-    `<div class="stack">${panel("未結異常", tbl("<th>#</th><th>代號</th><th>類型</th><th>暫停交易</th><th>內容</th><th>建立</th>", r1, "沒有未結異常", 6) +
-      '<div class="sub" style="padding:14px 20px;border-top:1px solid var(--line)">處理方式：<code>trader ledger adjust … --note …</code>，完成後 <code>--resolve ID</code> 或 <code>--unpause 代號</code>。</div>')}
+    `<div class="stack">${panel("未結異常", tbl("<th>#</th><th>代號</th><th>類型</th><th>暫停交易</th><th>內容與處理</th><th>建立</th>", r1, "沒有未結異常", 6))}
     ${panel("待人工處理的公司行動", tbl('<th>生效日</th><th>代號</th><th>類型</th><th class="n">比例</th><th class="n">每股現金</th><th>新代號</th><th>狀態</th>', r2, "沒有", 7))}</div>`;
 };
 
@@ -569,6 +624,18 @@ async function refreshBadge() {
     const b = document.querySelector('nav a[href="#anomalies"]');
     b.innerHTML = `異常${s.open_anomalies ? `<span class="dot warn">${esc(s.open_anomalies)}</span>` : ""}`;
     $("#asof").textContent = s.as_of ? `收盤 ${s.as_of}` : "";
+    // 排程健康警示（M8-D4-05）：daily 落後 ≥2 交易日、排程放棄、或有暫停交易時，導覽列下方一行
+    let hw = $("#health-warn");
+    if (!hw) {
+      hw = document.createElement("div");
+      hw.id = "health-warn";
+      hw.className = "banner";
+      hw.style.cssText = "max-width:1200px;margin:12px auto 0";
+      $("header.top").after(hw);
+    }
+    const w = s.health && s.health.warning;
+    hw.style.display = w ? "flex" : "none";
+    hw.innerHTML = w ? `<div><div class="t">排程或帳本需要注意</div><div class="s">${esc(w)}</div></div><a class="btn sm" href="#anomalies">看異常</a>` : "";
   } catch { /* 伺服器暫時不可用 */ }
 }
 

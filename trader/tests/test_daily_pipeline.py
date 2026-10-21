@@ -3,6 +3,7 @@
 日期：D1=2026-10-15（四）、D2=2026-10-16（五）、D3=2026-10-19（一）、週六=2026-10-17。
 """
 import json
+from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
@@ -56,7 +57,7 @@ class FakeSec:
     def cik_for(self, ticker):
         return None
 
-    def filings(self, cik, asof, since=None, forms=None):
+    def filings(self, cik, asof, since=None, forms=None, max_age_hours=None):
         return []
 
 
@@ -115,7 +116,11 @@ def _router(cfg, paths, responses=None):
     return Router(cfg, paths.routing_json, dry_run=True, fake=FakeRunner(responses=responses or {}))
 
 
+NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)   # 測試日期都已收盤（M7-D7-05 的現在時間檢查）
+
+
 def _run(cfg, paths, conn, date, alpaca, **kw):
+    kw.setdefault("now", NOW)
     return DP.run_daily(cfg, paths, conn, date, clients=_clients(alpaca), skip_review=True,
                         router=kw.pop("router", None) or _router(cfg, paths), **kw)
 
@@ -124,7 +129,9 @@ def test_non_trading_day_is_skipped(world):
     cfg, paths, conn = world
     s = _run(cfg, paths, conn, SAT, FakeAlpaca(_bars()))
     assert s == {"skipped": "非交易日", "date": SAT}
-    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+    # 寫 done 列（kind=daily_skip）：排程不會當失敗重試；不算 daily_close（M7-D1-09）
+    r = conn.execute("SELECT kind, status FROM runs").fetchall()
+    assert [tuple(x) for x in r] == [("daily_skip", "done")]
 
 
 def test_buy_next_day_fill_and_nav(world):
@@ -137,14 +144,14 @@ def test_buy_next_day_fill_and_nav(world):
     assert "error" not in s1, s1
     assert len(s1["orders"]) == 1
     o = s1["orders"][0]
-    # 首批 50% × 10% × 100000 = 5000；限價 50.05 → 99 股；當日建單、次日撮合
-    assert o["qty"] == 99 and o["created_date"] == D1 and o["side"] == "BUY"
+    # 首批 50% × 10% × 100000 = 5000；股數依收盤×(1＋滑價)＝50.05 → 99 股；限價＝上限×0.9999（D04）；當日建單、次日撮合
+    assert o["qty"] == 99 and o["created_date"] == D1 and o["side"] == "BUY" and o["limit_price"] == 59.99
     assert s1["fills"] == []
 
     s2 = _run(cfg, paths, conn, D2, alp)
     assert "error" not in s2, s2
     assert len(s2["fills"]) == 1 and s2["fills"][0]["qty"] == 99
-    assert s2["fills"][0]["price"] == pytest.approx(50.05)
+    assert s2["fills"][0]["price"] == pytest.approx(round((51.0 + 49.5 + 50.0) / 3 * 1.001, 4))   # 典型價＋滑價（D07）
     pos = book.positions(conn)["AAA"]
     assert pos["qty"] == 99 and pos["first_buy_date"] == D2
     assert s2["nav"]["n_positions"] == 1
@@ -201,7 +208,7 @@ def test_price_triggered_buy_has_cooling_off(world):
     assert len(s3["fills"]) == 1
 
 
-def test_thesis_sell_all_fills_next_day_at_open_less_slippage(world):
+def test_thesis_sell_all_fills_next_day_at_typical_less_slippage(world):
     cfg, paths, conn = world
     _reg(conn, "ZZZ", "HOLDING", {"cik": "0000000003", "grade": "B", "auto_buy_cap": 60.0})
     db.insert(conn, "positions", {"ticker": "ZZZ", "qty": 100, "avg_cost": 40.0, "first_buy_date": "2025-01-01",
@@ -212,7 +219,7 @@ def test_thesis_sell_all_fills_next_day_at_open_less_slippage(world):
     assert s1["orders"][0]["qty"] == 100 and s1["orders"][0]["created_date"] == D1   # 證偽不受冷靜期限制
     s2 = _run(cfg, paths, conn, D2, alp)
     assert len(s2["fills"]) == 1
-    assert s2["fills"][0]["price"] == pytest.approx(50.0 * (1 - 10 / 1e4))           # 開盤價減滑價
+    assert s2["fills"][0]["price"] == pytest.approx(50.0 * (1 - 10 / 1e4))           # 典型價 (51+49+50)/3 減滑價（D07）
     assert "ZZZ" not in book.positions(conn)
 
 
@@ -329,6 +336,42 @@ def test_review_failure_blocks_new_buys_but_not_sells(world, monkeypatch):
     assert any("今日不下新買單" in n for n in s["notes"])
 
 
+def test_review_skipped_listed_in_daily_output(world, monkeypatch):
+    """X13 交接：觸發檢查跳過的檔（如 SEC 申報清單抓取失敗）要在 daily 輸出可見。"""
+    cfg, paths, conn = world
+    skipped = [{"ticker": "AAA", "reason": "SEC 申報清單抓取失敗：Timeout"}]
+    monkeypatch.setattr(DP, "run_review", lambda *a, **k: {"run_id": "review-x", "counts": {}, "skipped": skipped,
+                                                           "engine": {"status": "done", "failed": 0}})
+    s = DP.run_daily(cfg, paths, conn, D1, clients=_clients(FakeAlpaca(_bars())), skip_review=False,
+                     router=_router(cfg, paths))
+    assert s["review"]["ok"] is True and s["review"]["skipped"] == skipped
+
+
+def test_newer_non_buy_decision_cancels_older_buy(world):
+    """M6_D7_09：窗口內 BUY 之後較新的 NO_ACTION → 不下單（每檔只看最後一筆決策）。"""
+    cfg, paths, conn = world
+    _reg(conn, "AAA", "WATCH", {"cik": "0000000001", "auto_buy_cap": 60.0, "grade": "B"})
+    _dec(conn, "AAA-20261015-1", "AAA", D1, "BUY", card=CARD)
+    _dec(conn, "AAA-20261015-2", "AAA", D1, "NO_ACTION")
+    s = _run(cfg, paths, conn, D1, FakeAlpaca(_bars()))
+    assert "error" not in s, s
+    assert s["orders"] == [] and s["buys"] == []
+
+
+def test_bad_card_does_not_fail_daily(world):
+    """M6-D1-02：一張壞卡（字串目標權重）只讓該檔 skip，daily 仍完成、其他檔照常下單。"""
+    cfg, paths, conn = world
+    _reg(conn, "AAA", "WATCH", {"cik": "0000000001", "auto_buy_cap": 60.0, "grade": "B"})
+    _reg(conn, "BBB", "WATCH", {"cik": "0000000002", "auto_buy_cap": 60.0, "grade": "B"})
+    _dec(conn, "AAA-20261015-1", "AAA", D1, "BUY", card={**CARD, "target_weight_pct": "10%", "max_weight_pct": 10})
+    _dec(conn, "BBB-20261015-1", "BBB", D1, "BUY", card=CARD)
+    s = _run(cfg, paths, conn, D1, FakeAlpaca(_bars()))
+    assert "error" not in s, s
+    assert [o["ticker"] for o in s["orders"]] == ["BBB"]
+    row = conn.execute("SELECT status FROM runs WHERE run_id=?", (f"daily-{D1}",)).fetchone()
+    assert row["status"] == "done"
+
+
 def test_missing_alpaca_raises_error_summary_not_crash(world):
     cfg, paths, conn = world
     with pytest.raises(DP.DailyError):
@@ -347,3 +390,23 @@ def test_cli_daily_and_ledger(state_dir, tmp_path, monkeypatch, capsys):
     rc = cli.main(["ledger", "show", "--state-dir", str(state_dir)])
     out = capsys.readouterr().out
     assert rc == 0 and '"cash"' in out
+
+
+def test_open_buy_cancelled_when_thesis_falsified_before_fill(world):
+    """M7-D4-01：買單未成交期間 THESIS 證偽（未持有→WATCH）→ 撤單、不成交。D05／check-P17：重核提前到撮合前
+    （限價改為上限×0.9999 後 D2 最低價 51 會觸及，撮合前就要撤）。"""
+    cfg, paths, conn = world
+    _reg(conn, "AAA", "WATCH", {"cik": "0000000001", "auto_buy_cap": 60.0, "grade": "B"})
+    _dec(conn, "AAA-20261015-1", "AAA", D1, "BUY", card=CARD)
+    alp = FakeAlpaca(_bars(d2_open=52.0, d2_low=51.0))   # D2 最低價 51 < 限價 59.99：不撤就會成交
+    s1 = _run(cfg, paths, conn, D1, alp)
+    oid = s1["orders"][0]["order_id"]
+    db.insert(conn, "decisions", {"decision_id": "AAA-20261016-1", "ticker": "AAA", "decision_date": D2,
+                                  "data": {"action": "WATCH", "review_type": "THESIS", "thesis_check": "證偽"},
+                                  "created_at": db.now_iso()})
+    s2 = _run(cfg, paths, conn, D2, alp)
+    assert "error" not in s2, s2
+    assert s2["fills"] == [] and [c["order_id"] for c in s2["recheck_cancels"]] == [oid]
+    r = conn.execute("SELECT status, cancel_reason FROM orders WHERE order_id=?", (oid,)).fetchone()
+    assert r["status"] == "cancelled" and "重核" in r["cancel_reason"]
+    assert _run(cfg, paths, conn, D3, alp)["fills"] == []

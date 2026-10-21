@@ -1,5 +1,5 @@
-# 類別比例表：ratio＝該類別每股相當於幾股「交易類別」；無經濟權益＝0。member 為 XBRL StatementClassOfStockAxis 成員本地名。
-# 只用於 EPS 比例無法自動換算者；每列須有申報原文佐證。出現表外的新類別 → 不換算（資料不足）。
+# 類別比例表：ratio＝該類別每股的經濟權益（盈餘／股利分配權）相當於幾股「交易類別」，與 xbrl_shares 的 EPS 比例自動換算同一口徑（決策 D65）；不是轉換比例。無經濟權益＝0。member 為 XBRL StatementClassOfStockAxis 成員本地名。
+# 只用於 EPS 比例無法自動換算者；每列須有申報原文佐證（轉換比例只在與經濟權益相同時可作佐證）。出現表外的新類別 → 不換算（資料不足）。
 ticker,member,ratio,evidence
 STZ,CommonClassAMember,1,"交易類別（10-K 2026-04-22 封面：Class A Common Stock）"
 STZ,ConvertibleCommonStockMember,1,"10-K 2026-04-22 Note：Class 1 Stock convertible into Class A Stock on a one-to-one basis"

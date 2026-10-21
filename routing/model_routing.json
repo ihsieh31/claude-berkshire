@@ -1,5 +1,5 @@
 {
- "_說明": "訊號 → 工作 → 模型 對應表。skill 與腳本都不呼叫模型；外部交易框架讀訊號檔、依本表建立工作、調用模型、驗證輸出、回寫狀態。路徑相對於套件根目錄（含 berkshire-screen-merged/、berkshire-deep-merged/、routing/）。模型只標強／中／弱等級，由框架對應實際模型。",
+ "_說明": "訊號 → 工作 → 模型 對應表。skill 與腳本都不呼叫模型；外部交易框架讀訊號檔、依本表建立工作、調用模型、驗證輸出、回寫狀態。路徑相對於套件根目錄（含 berkshire-screen-merged/、berkshire-deep-merged/、routing/）。模型只標強／中／弱等級，由框架對應實際模型。程式（trader/trader/llm/router.py）只讀各工作的 model 與 max_context_tokens（含 defaults）；其餘欄位是說明文字，實際行為以框架程式為準。代理式後端（claude_code）的 max_context_tokens 只估提示本身，模型自己讀的沙箱檔不計。",
  "version": "routing-v1",
  "models": {
   "_說明": "只標強度等級，實際模型由框架設定；FULL_A 用強模型未經驗證，紙上交易期間可對 3–5 檔做強／中比較",
@@ -10,18 +10,18 @@
  "defaults": {
   "max_context_tokens": 100000,
   "unit": "一個工作只處理一檔，除非該工作另有 batch 設定",
-  "on_invalid_output": "重試 1 次；仍不合格 → 該檔本輪結論記 NO_ACTION/MISSING_DATA 並寫入決策日誌，不得以模型自由文字取代",
-  "price_isolation": "框架負責：FULL_A 與 TRIAGE、THESIS 的輸入目錄不得出現 *_price.json 或任何價格、市值、本益比、初篩排名"
+  "on_invalid_output": "重試 1 次（重建沙箱）；仍不合格 → 框架依工作寫保守結論，不得以模型自由文字取代：DOSSIER／FULL_A／FULL_B → NO_ACTION/MISSING_DATA（持股另交 HOLD_REVIEW）；TRIAGE → 升 THESIS；THESIS → 疑似（停止加碼）並升完整分析；PRICE → 閘門未過紀錄（暫停加碼至下次複查）；RED_TEAM → WATCH（持股另交 HOLD_REVIEW）；HOLD_REVIEW → HOLD＋停止加碼；CORP_ACTION → 異常＋該檔暫停。工作記 conservative_fallback（不算失敗、不擋買、jobs retry 不重跑，另記低嚴重度異常）。非格式失敗（傳輸、準備例外）工作記 failed：PRICE、THESIS 比照上列寫保守紀錄；RED_TEAM → WATCH（持股另交 HOLD_REVIEW）；深度鏈（DOSSIER／FULL_A／FULL_B）不寫 MISSING_DATA、不動登錄表，持股接 HOLD_REVIEW，其餘交 run 收尾；run 結束時仍沒有結論的檔，持股記 HOLD＋停止加碼（該次失敗修好即解除）、其他記 WATCH（不動登錄表，下次觸發照常重排）",
+  "price_isolation": "框架負責：DOSSIER、FULL_A 與 TRIAGE、THESIS 的輸入目錄不得出現 *_price.json 或任何價格、市值、本益比、初篩排名"
  },
  "signals": {
   "screen_handoff": {
    "file": "result_handoff.json（berkshire-screen-merged/scripts/screen.py --out result 產出）",
    "fields": {
     "core_shortlist[]": "核心道前 15 檔 → 每檔：DOSSIER → FULL_A → FULL_B →（擬 BUY）RED_TEAM",
-    "special_handoff[]": "特殊情境（預設 0 檔）→ 同上，FULL_A 必做步 4A 困境檢查",
+    "special_handoff[]": "特殊情境（預設 0 檔）→ 同上；價格類困境（T3／T5、特殊交棒標記，放在 price_context，前半看不到）由 FULL_B 看價後做步 4A 困境檢查（D71）",
     "special_watch[]": "只列觀察，不建工作"
    },
-   "skip_rule": "登錄表已有該檔、status 非 MISSING_DATA、last_full_review_date 在 12 個月內 → 不建工作（論點沒動就不重做；兩週檢查會處理）"
+   "skip_rule": "登錄表已有該檔、status 非 MISSING_DATA、last_full_review_date 早於決策日且未滿 365 天、未到 next_full_review_due → 不建工作（論點沒動就不重做；兩週檢查會處理；跳過的不往下遞補，D67）。例外：登錄表 origin=hark_b（他機結果搬來當初始資料）的 REJECT／TOO_HARD 再被選入時照建工作，在本機重新完整分析。判定以 trader/trader/pipelines/screen.py 的 needs_full 為準"
   },
   "review_due": {
    "file": "due.json（berkshire-deep-merged/scripts/review_due.py 產出，signal_version=review-due-v2）",
@@ -50,7 +50,7 @@
     "schema": "routing/output_schemas.json#DOSSIER"
    },
    "max_context_tokens": 100000,
-   "output_limit": "{ticker}.md 全檔 ≤ 35k tokens"
+   "output_limit": "{ticker}.md 全檔 ≤ 40k tokens"
   },
   "TRIAGE": {
    "model": "weak",
@@ -69,21 +69,21 @@
   },
   "PRICE": {
    "model": "weak",
-   "batch": "可 3–5 檔一個工作（純機械）；框架亦可不經模型直接重算 cap_calc",
-   "pre_script": "python berkshire-deep-merged/scripts/cap_calc.py {state}/cap_inputs/{ticker}.json（只更新 price、long_rate）",
+   "batch": "1（一個工作只處理一檔，trader/trader/jobs/review_jobs.py PriceHandler；提示要求輸出單一 JSON 物件）",
+   "pre_script": "python berkshire-deep-merged/scripts/cap_calc.py {state}/cap_inputs/{ticker}.json（只更新 price、long_rate、long_rate_20y_med 與 P/E 中位；P/E 中位取凍結檔，缺 → null、不沿用舊值，D60；寫在本次工作目錄，state 原輸入不動）",
    "prompt": "routing/prompts/PRICE.md",
    "inputs": [
-    "cap_calc 新輸出",
-    "上次訊號卡",
-    "登錄表該檔",
-    "組合狀態（持股、現金、檔數、已承諾）",
-    "論點檔"
+    "cap_result.json（cap_calc 新輸出，含 inputs_used、framework_notes）",
+    "last_signal_card.json（上次訊號卡）",
+    "registry_entry.json（登錄表該檔）",
+    "portfolio_state.json（組合狀態：持股、現金、檔數、已承諾）",
+    "thesis/（論點檔與增補，有才附）"
    ],
    "output": {
     "schema": "routing/output_schemas.json#PRICE"
    },
    "max_context_tokens": 40000,
-   "escalate": "needs_full=true（任何需要判斷的題目、cap_calc 有新警示、等級可能變動）→ DOSSIER → FULL_A"
+   "escalate": "框架判定（trader/trader/jobs/review_jobs.py PriceHandler.post）：needs_full=true（模型只在 cap_calc grade_used 與登錄表等級不同時設；框架亦自行檢查，另比對上次訊號卡等級，cap_calc 等級先取 cap_inputs 與登錄表較保守者；舊「結論測試翻轉」路徑已刪，D90）、g10_still_valid=false 或 g9_contrarian 空白（P-63、D28）、閘門 3 已過期（框架依決策日誌自判）、本次長債缺（cap_result.rates_stale）→ DOSSIER → FULL_A，不寫 PRICE 結論；非持股三閘門全過、或持股三閘門全過但登錄表目標權重未評（缺或 0）→ DOSSIER → FULL_A（近 90 天完整分析已看過可買價位仍未判 BUY 者維持 WATCH／HOLD；持股三閘門全過的 ADD 同樣適用，改 HOLD）；動作由框架算出，模型 proposed_action 只記日誌（D28）；持股賣出側由框架決定：現價 ≥ 荒謬級線，或現價 ≥ IV_base 且建倉滿一年、且不低於上次 sell_review_above（P-25）→ 寫 PRICE 結論後交 HOLD_REVIEW（D03）"
   },
   "THESIS": {
    "model": {
@@ -94,23 +94,27 @@
    "inputs": [
     "論點檔",
     "失效條件",
-    "上次分析後的新申報節錄（10-Q 管理層討論、分部、8-K 正文）",
+    "上次分析後的新申報節錄（10-Q/10-Q/A 自 MD&A 起、10-K/A 整份，每份至多 40,000 字；8-K/8-K/A 正文與財報附件，只有 9.01／5.07 的 8-K 不附）",
+    "申報抓取狀態（thesis_sec/_status.txt：未抓取原因；thesis_sec/_omitted.txt：因篇幅未附的申報清單）",
+    "新聞標題（只有日期、標題、來源）",
     "TRIAGE 結果（如有）"
    ],
    "output": {
     "schema": "routing/output_schemas.json#THESIS"
    },
    "max_context_tokens": 60000,
-   "escalate": "verdict ∈ {疑似, 證偽} → FULL；HOLDING 且 證偽 → 框架可先送出賣出指令（SKILL §6：證偽全清，下一交易日開始），FULL 只補報告"
+   "escalate": "證偽先經框架核對（D02；writeback.vet_falsification）。持股證偽且核對通過（falsify_type 為失效條件觸發／最高決策者失信／會計問題；condition_id：失效條件觸發必填且在凍結論點的失效條件清單內、kill_criteria_status 該條標「已觸發」，誠信／會計類可為 null、有填須在清單內；evidence 至少一筆、每筆有來源且日期早於決策日）→ 寫 SELL_ALL，自下一交易日執行，不升 FULL；持股證偽但核對不過或屬經濟特性惡化 → 改疑似（停止加碼）＋同輪 HOLD_REVIEW（中）＋ DOSSIER → FULL_A；其他疑似／證偽（含非持股）→ DOSSIER → FULL_A；完好且同期有 PRICE 型觸發（also_price 或 base_action=PRICE）→ PRICE（沒有 cap_inputs → DOSSIER）"
   },
   "FULL_A": {
    "model": "strong",
    "prompt": "routing/prompts/FULL_A.md",
    "phase": "步 0–8（STEP0、G0–G6、4A、產業檢查）＋ 閘門 3 問卷；看不到任何價格",
    "inputs": [
-    "{work}/dossier/{ticker}.md（不含價格）",
-    "screen_context（交接檔該檔，刪除 price_context）",
-    "berkshire-deep-merged/SKILL.md 與步驟指定的 references 段落"
+    "{work}/dossier/{ticker}.md（不含價格；舊資料包先再遮蔽回購股數）",
+    "{work}/dossier/{ticker}_dq.json（DOSSIER 資料包核對結果，有才附）",
+    "screen_context（交接檔該檔，刪除 price_context 與 X5）",
+    "{ticker}/previous/（框架退回重做時附上一版輸出）",
+    "berkshire-deep-merged/SKILL.md 與步驟指定的 references 段落（pkg/ 副本，含 routing/output_schemas.json）"
    ],
    "output": {
     "files": [
@@ -118,9 +122,10 @@
      "{work}/{ticker}/gate3_answers.json",
      "{work}/{ticker}/report_A.md"
     ],
+    "_說明": "模型自己寫的只有 gate3_answers.json 與 report_A.md；phaseA.json 由框架把模型最後回覆的 FULL_A JSON 寫入（trader/trader/jobs/deep.py），模型不要自己寫",
     "schema": "routing/output_schemas.json#FULL_A"
    },
-   "post_script": "python berkshire-deep-merged/scripts/gate3_check.py --answers {work}/{ticker}/gate3_answers.json",
+   "post_script": "python berkshire-deep-merged/scripts/gate3_check.py --answers {work}/{ticker}/gate3_answers.json --asof {asof}",
    "max_context_tokens": 100000,
    "next": "phaseA.stopped=true → 不跑 FULL_B，框架以 phaseA 的停止碼直接寫訊號卡／登錄表／日誌；否則框架記錄問卷存檔時間後 → FULL_B"
   },
@@ -129,13 +134,15 @@
    "prompt": "routing/prompts/FULL_B.md",
    "phase": "步 9–15（G7 估值、等級、G8、G9、G10、G11、結論卡）",
    "inputs": [
-    "phaseA.json、report_A.md、gate3_check 結果",
-    "{work}/dossier/{ticker}.md",
+    "{ticker}/phaseA.json、report_A.md、gate3_result.json（gate3_check 結果）、gate3_answers.json",
+    "{work}/dossier/{ticker}.md、{ticker}_dq.json（有才附）",
     "{work}/dossier/{ticker}_price.json（此時才給）",
-    "組合狀態",
-    "大型股 P/E 中位（可缺）"
+    "{work}/portfolio/holdings_g8.json（G8 比較檔，框架以決策日收盤重算）",
+    "{ticker}/previous/（框架退回重做時附上一版輸出）",
+    "組合狀態、大型股 P/E 中位（可缺）、本檔既有外部變數判定（提示代入）",
+    "berkshire-deep-merged/SKILL.md 與步驟指定的 references 段落（pkg/ 副本）"
    ],
-   "pre_check": "框架確認 gate3_answers.json 存檔時間早於本工作建立時間，並把 price_file_opened_at 設為本工作建立時間",
+   "pre_check": "框架以 gate3_answers.json 的 mtime 早於開價格檔時間為閘（不早於 → 不開價格檔）；開檔時間寫入沙箱的 price_file_opened_at.txt（trader/trader/jobs/sandbox.py open_price_file），並留存一份在分析目錄、路徑寫進決策日誌 price_file_opened_at_file。作答先於看價由此框架保證，作答檔的 price_file_opened_at 欄在 FULL_A 留空（M2-D10-04）",
    "output": {
     "files": [
      "{work}/{ticker}/cap_input.json",
@@ -155,15 +162,17 @@
    "model": "strong",
    "prompt": "routing/prompts/RED_TEAM.md",
    "inputs": [
-    "report.md",
-    "signal_card.json",
-    "{work}/dossier/{ticker}.md"
+    "{ticker}/report.md、signal_card.json",
+    "{ticker}/phaseA.json、cap_input.json、cap_result.json、gate3_result.json（重算上限與正常化盈餘用，有才附）",
+    "{work}/dossier/{ticker}.md、{ticker}_price.json、{ticker}_dq.json（有才附）",
+    "框架調整註記（FULL_B 之後的覆寫與降級，提示代入）",
+    "berkshire-deep-merged/SKILL.md 與步驟指定的 references 段落（pkg/ 副本）"
    ],
    "output": {
     "schema": "routing/output_schemas.json#RED_TEAM"
    },
    "max_context_tokens": 80000,
-   "next": "fatal=true 或 number_errors 非空 → 訊號降為 WATCH，退回 FULL_B 修正一次；仍有 → 維持 WATCH"
+   "next": "fatal=true、number_errors 或 rule_violations 有實際項目（空白與「無／none／n/a」等佔位不算）、或 verdict=退回 → 退回 FULL_B 修正一次；修正後紅隊仍判 fatal=true → NO_ACTION＋RED_LIGHT（G9 停止碼；登錄表留 WATCH、決策日＋14 天以反方角色重跑、PRICE 不得升買、不進 12 個月排除；設計決策 D24），只剩 number_errors／rule_violations／verdict=退回 未解 → WATCH（兩者持股另交 HOLD_REVIEW）；通過 → BUY"
   },
   "PORTFOLIO": {
    "model": "none",
@@ -190,11 +199,13 @@
    "prompt": "routing/prompts/HOLD_REVIEW.md",
    "phase": "持股完整複查的 H2 賣出決策樹（rulebook §9；SELL-032 定版）",
    "inputs": [
-    "phaseA.json、report_A.md",
-    "FULL_B 輸出（若 FULL_A 未停止）：report.md、signal_card.json、cap_result.json",
-    "論點檔與增補",
-    "觸發本次複查的 THESIS 結果",
-    "持股（股數、成本、建倉日）與價格"
+    "{ticker}/phaseA.json、report_A.md",
+    "FULL_B 輸出（走完 FULL_B 時）：report.md、signal_card.json、cap_result.json、red_team.json；FULL_A 停止、深度鏈失敗或 THESIS 降級時不附 cap_result.json（無 IV_base），失敗／THESIS 降級只附 phaseA.json、report_A.md",
+    "{work}/dossier/{ticker}.md、{ticker}_dq.json（有才附）",
+    "portfolio/holdings_g8.json（G8 比較檔，Q3 更好的用途）",
+    "PRICE 觸發時：last_full_signal_card.json（最近一次完整分析的訊號卡）、registry_entry.json",
+    "thesis/（論點檔與增補）",
+    "觸發本次複查的 THESIS 結果、持股（股數、成本、建倉日、峰值股數）、價格、估值輸入、上次估值減碼（提示代入）"
    ],
    "output": {
     "schema": "routing/output_schemas.json#HOLD_REVIEW"
@@ -204,10 +215,12 @@
   }
  },
  "state_writes": {
-  "registry": "state/registry.json（格式 berkshire-deep-merged/assets/registry_schema.json）：FULL_B 寫整列；PRICE 更新 last_review_date、review_price、t30_at_valuation、auto_buy_cap、sell_review_above、absurd_price_line（否則下次又觸發）；THESIS 只更新 last_review_date、review_price",
-  "decision_log": "state/decision_log.jsonl（格式 assets/decision_log_schema.json）：每個產生結論的工作都寫，含閘門沒過的",
+  "_說明": "狀態存在 SQLite（state/trader.db）；分析結論的寫入者是 trader/trader/analysis/writeback.py，帳本、公司行動與每日流程另寫登錄表的持有側欄位（見 registry）；模型輸出只是寫入的來源之一，不直接寫狀態",
+  "registry": "registry 表（data 欄格式 berkshire-deep-merged/assets/registry_schema.json）。FULL_B 完成：寫整列（持有側欄位 cost、first_buy_date、weight、build_plan、last_trim、peak_qty、entry_norm_pe 保留；持股另寫 full_review_weight＝weight，review_due 權重邊緣觸發基準）。FULL_A 停止：非持股且無未成交買單寫整列（P-31 判定、論點檔、CIK 保留）；持股或有未成交買單只更新 status、last_review_date、last_full_review_date（MISSING_DATA 不推進）、asset_class、last_reason_code，持股或有未成交買單且非 MISSING_DATA 另寫 full_review_weight＝weight；有未成交買單時 build_plan 剩餘批次歸 0。理由 RED_LIGHT（紅燈延後，P-64）寫 next_full_review_due＝決策日＋14 天。PRICE：last_review_date、t30_at_valuation、auto_buy_cap、sell_review_above、absurd_price_line（否則下次又觸發；賣出線缺值保留舊值）；review_price 只在不交 HOLD_REVIEW 時寫，交 HOLD_REVIEW 時待其成功回寫才寫（D46）。THESIS：last_review_date（申報未抓取不推進；有未附申報只推進到最早未附者的申報日）、review_price（續接 PRICE 時不寫，待 PRICE／HOLD_REVIEW 回寫）、kill_criteria_due（逐條 checked_on／status／due）、持股疑似時 observe_until（P-50）。HOLD_REVIEW：last_review_date；last_full_review_date 只在 full_stage A／B 且非 MISSING_DATA；observe_until（框架核對，P-50 到期須結案）；review_price（成功回寫才寫，含上游 PRICE／THESIS 延後者）；估值減碼記 last_trim；grade 只降不升；P-31 外部變數。CORP_ACTION（trader/trader/ledger/corp_actions.py）：拆合股換算每股欄位（auto_buy_cap、sell_review_above、absurd_price_line、cost、review_price）與 peak_qty、last_trim；代號變更改登錄表代號。帳本（trader/trader/ledger/book.py，broker 成交與對帳經此寫）：status=HOLDING、first_buy_date、cost；持股增加寫 peak_qty、entry_norm_pe；賣光改 WATCH、清 auto_buy_cap／build_plan／t30_at_valuation、記 sold_out_at；估值 TRIM 未成交標 last_trim.unfilled（broker.py）。daily（trader/trader/pipelines/daily.py）：每日更新 weight，下單後建立或消耗 build_plan。相關群（trader/trader/portfolio/correlation.py record_group_links）：同群判定或改判寫兩檔 corr_links。cli registry retire：無持股、無未成交委託時 status 改 RETIRED、data 記 retired（不刪列）。分析結論的回寫遇舊資料日不蓋掉較新的 review_price 與價格線（F05R2、M6-D6-07）",
+  "decisions": "decisions 表（data 欄格式 assets/decision_log_schema.json）：每個產生結論的工作都寫，含閘門沒過的",
+  "signals": "signals 表（data 欄格式 assets/signal_card_schema.json）：FULL_B、FULL_A 停止、PRICE 寫訊號卡",
   "thesis": "state/theses/{ticker}_{asof}.md：凍結，只能增補",
-  "decision_id": "{ticker}-{YYYYMMDD}-{n}"
+  "decision_id": "{ticker}-{YYYYMMDD}-{n}，由框架編號（writeback.next_decision_id），不採用模型輸出"
  },
  "cost_estimate_per_ticker_tokens": {
   "_說明": "粗估，供排程與額度規劃；實際依年報長度",

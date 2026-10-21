@@ -3,33 +3,41 @@
 # 注意：秘密（金鑰）不得寫在這裡；只寫環境變數名稱，實際值放在 .env 或系統環境變數。
 
 account:
-  initial_cash: 100000          # 初始資金（美元）
-  slippage_bps: 10              # 滑價（基點）
-  commission_per_order: 0       # 每筆委託手續費（美元）
+  initial_cash: 100000          # 初始資金（美元）；須 > 0
+  slippage_bps: 10              # 滑價（基點）；0 ≤ x < 1000
+  commission_per_order: 0       # 每筆委託手續費（美元）；≥ 0
+  cash_plan_buffer: 1.2         # 新買以計畫現金水位＝下限 5% × 1.2＝6% 計可動用現金；5% 是硬下限（D15）
+  user_hard_cap: null           # 單檔權重硬上限（小數，例如 0.2；null＝無）：超過才減碼、只減到上限（制度類，D01）；
+                                #   因上漲超過等級上限（A 15%／B 10%）不賣，只停止加碼
   benchmark: SPY                # 基準指數 ETF
 
-universe: sp500                 # 股票池
+universe: sp500                 # 股票池：目前只支援 sp500（其他值載入時報錯）；自訂名單用 state/universe_override.txt
 
 schedule:
   timezone: America/New_York
   daily_close: "17:30"          # 收盤後：公司行動、撮合、淨值、持股觸發檢查
-  review_holdings: daily        # 持股每天檢查（純程式）
-  review_watch: biweekly        # 觀察名單每兩週檢查
-  quarterly_screen: ["02-20", "05-20", "08-20", "11-20"]   # 季度初選日（MM-DD）
+  # 持股固定每天隨 daily 做觸發檢查（有訊號時會派模型工作），不需設定
+  review_watch: biweekly        # 觀察名單檢查間隔：biweekly（14 天）或 weekly（7 天）
+  quarterly_screen: ["03-20", "05-20", "08-20", "11-20"]   # 季度初選日（MM-DD）；2 月那次延到 03-20，等多數 10-K 申報完
   monthly_freeze: "01"         # 每月 1 日凍結 P/E 中位數
 
-# 模型等級。每級三選一後端：
+# 模型等級。各工作用哪一級見 routing/model_routing.json（job_tier_overrides 可覆寫）：
+#   強 strong：FULL_A、RED_TEAM（approval.require_for_tiers 預設須同意）
+#   中 medium：FULL_B、HOLD_REVIEW、持股 THESIS
+#   弱 weak  ：DOSSIER、TRIAGE、PRICE、CORP_ACTION、非持股 THESIS
+# 每級四選一後端：
 #   claude_code    ：呼叫本機 claude CLI（只需 model，可用 claude_bin 指定執行檔）
 #   openai_compat  ：OpenAI 相容 API（需 base_url、api_key_env、model）
 #   fake           ：假回應，僅供測試與 dry-run，不連網
+#   hark_queue     ：Hark 工作區專用（交給 Hark 代理執行），使用者電腦不用
 models:
-  strong:                       # 強：用於最重要的深度分析（如 FULL_B、RED_TEAM）
+  strong:                       # 強：FULL_A、RED_TEAM（須同意）
     backend: claude_code
     model: opus
     effort: medium                # claude_code 專用：明確傳給 claude --effort（low|medium|high|xhigh|max）
     timeout_s: 1800             # 單次呼叫逾時秒數
     concurrency: 1              # 同時執行的工作數
-  medium:                       # 中：一般深度分析（OpenAI 相容後端示範）
+  medium:                       # 中：FULL_B、HOLD_REVIEW、持股 THESIS（OpenAI 相容後端示範）
     backend: openai_compat
     base_url: https://api.provider-a.com/v1
     api_key_env: PROVIDER_A_KEY # 金鑰的「環境變數名稱」，不是金鑰本身
@@ -37,7 +45,7 @@ models:
     max_output_tokens: 16000
     temperature: 0.0
     json_mode: true
-  weak:                         # 弱：篩選與分流（此處示範 fake 後端，正式使用請改為 openai_compat）
+  weak:                         # 弱：DOSSIER、TRIAGE、PRICE、CORP_ACTION、非持股 THESIS（此處示範 fake 後端，正式使用請改為 openai_compat）
     backend: fake
     model: fake                 # fake 後端不連網，只回傳測試用的假回應
     concurrency: 4
@@ -46,9 +54,11 @@ models:
 job_tier_overrides: {}          # 例：{FULL_B: strong}
 
 budget:
-  max_llm_calls_per_run: 200            # 單次執行最多模型呼叫次數
+  max_llm_calls_per_run: 200            # 單次執行最多模型呼叫次數；0＝不限（各預算鍵都不得為負）
   max_cost_usd_per_run: 100             # 單次執行（一輪 run）模型費用總和上限（美元）；0＝不限
   max_input_tokens_per_run: 0           # 輸入 token 總和上限；含快取讀取，代理式多回合會放大數倍，預設 0＝不限
+  max_llm_calls_per_day: 0              # 每日（台北日界，所有 run 合計）模型呼叫次數上限；0＝不限，到頂 run 記 paused_budget 並寫異常
+  max_cost_usd_per_day: 0               # 每日（台北日界，所有 run 合計）模型費用上限（美元）；0＝不限
 
 data:
   sec_user_agent_env: SEC_USER_AGENT    # SEC 要求的 User-Agent 環境變數名稱
@@ -56,10 +66,19 @@ data:
   alpaca_secret_env: ALPACA_SECRET_KEY  # Alpaca API 密鑰環境變數名稱
   alpaca_feed: iex                      # 免費方案用 iex；付費方案用 sip
   fred_key_env: FRED_API_KEY            # FRED API 金鑰環境變數名稱
+  research_price_source: alpaca         # 初選／深度分析取價來源：alpaca | yahoo（撮合、限價、ADV 一律 Alpaca）
+  adv_feed: iex                         # daily ADV 用的 Alpaca feed；確認帳戶可取 SIP 歷史後才改 sip
 
 dashboard:
   host: 127.0.0.1               # 僅本機連線；遠端查看請走其他通道
   port: 8787
+
+valuation:
+  cap_discount_k: {A: 0.95, B: 0.85}   # 自動買進上限＝min(P2′, k×IV_base)（ASK-1＝B；推論）；框架寫入 cap_input
+
+# 使用中模型的訓練資料截止日（D25）：決策日（含補跑的過去日期）早於此日 → 論點稿與決策日誌加註「可能有後見之明」。
+# 不確定時取較晚者（多標註、不漏標）；換模型時改。空字串＝不檢查
+model_cutoff: "2026-05-31"
 
 approval:
   require_for_tiers: [strong]   # 這些等級的工作（FULL_A、RED_TEAM）先進待同意區，使用者同意後才呼叫模型；[] ＝ 不需同意

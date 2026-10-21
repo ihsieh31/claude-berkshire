@@ -1,6 +1,11 @@
 {
- "_說明": "深度分析訊號卡。一致性約束見 SKILL.md 第 4 節。sell_review_above＝IV_base（只觸發賣出檢視）；absurd_price_line＝50×E（至少賣一半）；auto_buy_cap＝min(P2′, IV_base)；screen_context 只供追溯。",
+ "_說明": "深度分析訊號卡。一致性約束見 SKILL.md 第 4 節。external_drivers＝失效條件所依賴的外部變數（受控詞彙 assets/external_drivers.json 的 id 清單；null＝未判定，[]＝沒有失效條件描述外部變數），P-31 相關群依此分群。未評估的數值欄一律填 null（不得以 0 代替；0 代表已評且為零）。sell_review_above＝IV_base（只觸發賣出檢視）；absurd_price_line＝50×正常化 EPS（norm_eps；缺 → E）（觸發 → 交 HOLD_REVIEW 決定減碼）；auto_buy_cap＝0.95×min(P2′, k×IV_base)（k：A 0.95／B 0.85，框架設定；0.95＝VAL-045 結論測試明文化，D90）；buy_price_cap＝cap_calc 的硬上限 cap（非金融＝P2′；歷史成長 ≤1% 或 W-REV 時不高於 IV0×等級係數〔cap_components.IV0_cap〕；金融類＝min(P1, P4′)）；cap_components.P1_report_only＝等級係數×IV_cons（A 0.85／B 0.75／C 0.40）只作報告；price_to_cap＝現價÷auto_buy_cap；value_per_share、r_d、buy_price_cap、auto_buy_cap、cap_components、price_to_*、implied_growth、grade_used、conclusion_test_flips、W_PE 由框架以 cap_calc 結果覆寫；screen_context 只供追溯。max_weight_pct.single_event（P-30）由框架計算覆寫（procedure/08 §1；取不到 → null 並記「P-30 未檢查」）；max_weight_pct.correlated_group 框架不採用（同群額度見 correlated_group）。inferred_thresholds_used：模型照列所用推論鍵（references/inferred_thresholds.md）；cap_calc 套用的鍵（如 rd_floor、gimpl_cap、cap_discount_k、near_zero_g、fin_hard_cap）框架會補列（保留模型已列、去重）。其餘欄定義：mode＝HOST（宿主模式）；capital_scale＝rulebook §5.0 資金規模，宿主模式固定 SMALL；thesis_id＝論點檔檔名（不含路徑，與登錄表 thesis_file 同檔）；downgrades＝[{step, rule, driver_id, reason}]（與 FULL_A downgrades 同格式，含後半新增者），同一 driver_id 只降一次（D18）；delay_one_cycle＝P-64 同向偏誤疊加紅燈或 P-65 兩軌不一致而延後一個決策週期重跑 G9（red_light＝P-64 紅燈本身；execution.cooling_off_one_cycle＝價格或新聞觸發的執行冷靜期，延後一個交易日，與重跑無關）；ledger＝H3 兩本帳（對應為推論；疏忽只計圈內看懂卻沒買或買太少）：BUY／ADD＝COMMISSION（作為）、G7 價格內但本週期未買（G8、G11、閘門或名額擋下）＝OMISSION_CANDIDATE（疏忽候選）、其餘＝NONE；confidence＝rulebook T-4 欄位，對本卡結論的整體把握（判準為推論）：高＝必要資料齊且 G9 無未解反方、中＝有缺資料或未解反方但不改結論、低＝結論取決於缺項或推論參數。",
  "schema": "berkshire-deep-merged/signal-v1",
+ "_framework_fields": {
+  "_說明": "框架填，模型不填（RM6-3／M6-RS5-02）：以下追溯欄由框架回寫時依條件附加，不是訊號卡輸出欄；模型輸出 signal_card.json 不要填這些鍵。口徑同上：price_to_cap＝現價÷auto_buy_cap；buy_price_cap＝P2′（cap_calc 硬上限 cap）。",
+  "carried_from_decision_id": "沿用前一筆決策的訊號卡時，被沿用的 decision_id（追溯用）",
+  "gate1_warning": "閘門 1 警示：12 個月內無初篩判定而視為通過時的說明（D17）；否則 null"
+ },
  "stop_mode": "A_THESIS_CHECK",
  "as_of": "YYYY-MM-DD HH:MM 時區",
  "mode": "HOST",
@@ -8,13 +13,20 @@
  "ticker": "",
  "conclusion": "買 | 觀察 | 觀察（缺資料） | 不買",
  "signal": "BUY | WATCH | NO_ACTION",
- "reason_code": "PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT | NOT_THIS_SKILL",
- "stopped_at_gate": "STEP0 | G0..G11 | null",
+ "reason_code": "PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT | GATE3_FAIL | NOT_THIS_SKILL | FRAMEWORK_HOLD（GATE3_FAIL＝閘門 3 問卷不過、最多 WATCH，PRICE 不得升成買進、須重跑完整分析；設計決策 D24。FRAMEWORK_HOLD＝框架填：FULL_B 判 BUY 但框架降成 WATCH（G8、P-32、G9、D26、價格盲缺口、持股前半、紅隊未過），PRICE 同樣不得升成買進；模型不填，A3-M5B-01）",
+ "stopped_at_gate": "STEP0 | G0..G6 | 4A | G7..G11 | null（4A：步 4A 困境檢查停止；只因價格類訊號需要的 4A 由後半看價後補做，停在那裡也填 4A，設計決策 D71）",
  "rule_ids": [],
  "thesis_id": "",
  "one_liner": "",
  "certainty_grade": "A | B | C | D | null（未評到等級的停止填 null）",
  "downgrades": [],
+ "p08_final": {
+  "_說明": "選填（設計決策 D77；舊卡沒有此欄仍合法）。FULL_B 的 P-08 最終品質計分（procedure/01 §6），須與 report.md「P-08 最終」行一致：items_with_data＝可計 7 項中有資料項數（整數）、passed＝通過項數（整數）、rate＝通過率百分數（與報告行的 x% 同數，例如 60＝60%；有資料 0 項填 null）、quality＝優 | 可 | 降級。未走完 FULL_B（停止卡、THESIS／PRICE）整欄填 null 或省略。PRICE 觸發的 HOLD_REVIEW 由 last_full_signal_card.json 讀此欄判頂級複利型的品質優；欄缺＝不算優。",
+  "items_with_data": null,
+  "passed": null,
+  "rate": null,
+  "quality": "優 | 可 | 降級"
+ },
  "value_per_share": {
   "conservative": null,
   "base": null,
@@ -29,16 +41,24 @@
  },
  "buy_price_cap": null,
  "auto_buy_cap": null,
+ "grade_used": "cap_calc 實際採用的等級（P-21 可能再降一級；框架填）",
  "cap_components": {
   "P2_prime_g_impl_10": null,
   "P4_prime": null,
   "P1_report_only": null,
-  "P3_report_only": null
+  "P3_report_only": null,
+  "IV0_cap": null
  },
  "conclusion_test": {
   "applied": false,
   "cap_oe_x0_9": null,
   "cap_rate_sensitivity": null
+ },
+ "conclusion_test_flips": "true | false（框架填；D90 起 cap_calc 不再做翻轉測試〔E×0.9 腿已併入 auto_buy_cap＝0.95×原始上限〕，恆為 false；conclusion_test 各欄保留相容，填 applied=false、null）",
+ "_hold_side_fields": {
+  "_說明": "選填（A3-M2C-09；rulebook §13 列為訊號卡欄）：持有側的賣出／減碼結論由 HOLD_REVIEW 摘要承載（宿主不在完整分析訊號卡填）；完整分析卡填 null 或省略。",
+  "sell_flags": "{V: 估值賣出旗標數, F: 基本面賣出旗標數, multiple_alerts: 倍數警報數} | null",
+  "trim_to_weight_pct": "TRIM 時減到的目標權重（%）| null"
  },
  "warnings": {
   "W_LOSS": false,
@@ -53,6 +73,7 @@
  "price_to_cap": null,
  "g8_adjusted_expected_return": null,
  "implied_growth": null,
+ "g9_growth_reason": "字串或 null（10 年與 5 年成長差 >5pp 時必填：已證明成長取較高者的理由，同 G9 反方所寫；cap_calc g9_reason_required＝true 而缺 → 框架退回一次，仍缺 → 最多 WATCH）",
  "target_weight_pct": null,
  "max_weight_pct": {
   "tail": null,
@@ -70,6 +91,14 @@
   "avoid_open_close": true
  },
  "failure_conditions": [],
+ "external_drivers": null,
+ "external_drivers_basis": [],
+ "external_drivers_change_reason": null,
+ "asset_class": "非金融 | 銀行 | 保險 | 其他金融 | null",
+ "correlated_group": {
+  "_說明": "框架計算（P-31／P-32；trader/portfolio/correlation.py）：status unknown|none|ok|blocked、group 同群代號、variables 共同外部變數、room 剩餘權重（小數）、binding P31|P32（哪一條先綁定；群最壞相對損失＝成員 P-29 最壞損失〔下限 25%〕權重加權，缺 tail 時用 P-32 減損，設計決策 D11）、reason",
+  "status": null
+ },
  "sell_review_above": null,
  "review_trigger": {
   "cost_drawdown_pct": -12,
@@ -79,13 +108,13 @@
   "filings": true
  },
  "bias_count": {
-  "pro_trade": 0,
-  "pro_sell_or_wait": 0
+  "_說明": "未走到 G9 偏誤清單時兩項皆填 null；0 只代表已逐條作答且計數為零",
+  "pro_trade": null,
+  "pro_sell_or_wait": null
  },
  "red_light": false,
  "delay_one_cycle": false,
  "inferred_thresholds_used": [],
- "x98_clauses_used": [],
  "missing_data": [],
  "screen_context": {},
  "next_review": "",
@@ -100,7 +129,7 @@
   "q4_who_operates": "",
   "q5_reason_without_price_drop": "true|false",
   "result": "PASS_ALL | DOWNGRADE | TURNAROUND_REJECT",
-  "earnings_normalization": "5y_median | 5y_mean"
+  "earnings_normalization": "ex_shock_median | 5y_median | 5y_mean（SKILL §3：ex_shock_median＝近 5 年非產業共同衝擊年中位〔至少 3 年，主口徑〕；不足 3 年 → 4A 三問全過 5y_median、否則 5y_mean）"
  },
  "earnings_stability_roe_sd5": null,
  "schema_version_note": "merged-v1",

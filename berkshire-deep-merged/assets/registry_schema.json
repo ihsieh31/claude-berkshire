@@ -5,27 +5,47 @@
   {
    "ticker": "代號",
    "cik": "SEC CIK（10 碼或數字）",
-   "status": "HOLDING | WATCH | MISSING_DATA | TOO_HARD | REJECT | NO_ACTION",
+   "status": "HOLDING | WATCH | MISSING_DATA | TOO_HARD | REJECT | NO_ACTION | RETIRED（已人工停止追蹤：trader registry retire；review_due 不匯出，之後的分析結果不恢復追蹤）",
+   "_framework_fields": {
+    "_說明": "框架寫、選填（A3-M2A-11）：以下鍵由外部框架在回寫或例行檢查時寫入，模型不填；舊列沒有仍合法。",
+    "last_reason_code": "最近一次完整分析的停止碼／原因碼（PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT | GATE3_FAIL | NOT_THIS_SKILL …；框架寫）。review_due：觀察名單為 GATE3_FAIL 或 RED_LIGHT 時跌破上限、長債 ≥1pp 不排 PRICE（D24）；初篩 build_exclusions 讀（NOT_THIS_SKILL → X1）",
+    "filings_fail": {"count": "review_due 申報清單連續抓取失敗次數（同一決策日不重複計）", "since": "首次失敗時的 last_review_date（恢復後 review_due 窗口退回此日補查）", "last": "最近一次失敗的決策日 YYYY-MM-DD"},
+    "build_plan": {"_說明": "HOLDING 分批建倉計畫（P-37；框架寫、首批下單時建立，批次用完歸 0）", "target_weight": "計畫目標權重（小數）", "tranches_left": "剩餘批數", "days_above_cap": "價格在上限之上的天數", "started": "首批下單日 YYYY-MM-DD", "decision_id": "建倉決策", "target_weight_basis": "目標權重依據"},
+    "sold_out_at": "YYYY-MM-DD：持股賣光的日期（框架寫；PRICE／完整分析回寫以它判斷是否回寫上限、是否新持有期）"
+   },
    "grade": "A | B | C | D | null（未評到等級）",
    "last_review_date": "YYYY-MM-DD（任何層級的最近一次分析）",
    "last_full_review_date": "YYYY-MM-DD（最近一次 G0–G11 完整分析）",
    "review_price": "上次分析時的價格",
    "t30_at_valuation": "上次估值所用 30 年期殖利率（小數）",
-   "auto_buy_cap": "min(P2′, IV_base)；WATCH／HOLDING 必填",
+   "auto_buy_cap": "0.95 × min(P2′, k×IV_base)（k＝A 0.95／B 0.85，cap_calc 的 cap_discount_k；0.95＝VAL-045 結論測試明文化，D90）；WATCH／HOLDING 必填（C 級只是報告值，不可買）；IV_base 缺 → null（不設自動買進上限）",
    "sell_review_above": "IV_base",
-   "absurd_price_line": "50 × 正常化每股盈餘 E",
+   "absurd_price_line": "50 × 正常化 EPS（cap_input.norm_eps；缺 → E＝oe）；≤0 或缺 → null",
    "cost": "HOLDING：平均成本",
    "first_buy_date": "HOLDING：首次建倉日 YYYY-MM-DD（建倉未滿一年不因價格因素賣出，SKILL §6）",
    "weight": "HOLDING：目前市值權重（小數）",
+   "full_review_weight": "HOLDING：上次完整分析（推進 last_full_review_date）時的 weight（小數；框架寫）。review_due 權重 >25% 完整複查（P-43）的邊緣觸發基準：此值已 >25% 則不再觸發；缺＝視為未超過",
    "target_weight": "HOLDING：目標權重（小數）",
-   "thesis_file": "state/theses/代號_YYYY-MM-DD.md（凍結，只能增補）",
+   "last_trim": {"date": "YYYY-MM-DD（最近一次估值類減碼的決策日；框架寫，設計決策 D03）", "reason_code": "ABSURD | VALUATION（荒謬級 ≥1/2；3c 每次 ≤1/4）", "line": "觸發線（荒謬級線或 IV_base，每股）", "fraction": "減碼比例", "shares": "預計賣出股數", "peak_shares": "本持有期峰值股數（3c 累計須保留 ≥ 2/3）"},
+   "peak_qty": "HOLDING：本持有期峰值股數（整數；框架在買進成交、人工調整或對帳增加持股時寫＝max(舊峰值, 成交後股數)，減碼不降；成交前無持股＝新持有期重新起算；拆合股按比例換算取整數下限）。估值類減碼 3c 累計保留 ≥ 峰值 2/3 的峰值＝max(現有股數, last_trim.peak_shares, peak_qty)；缺 → 只用前兩者",
+   "entry_norm_pe": "HOLDING：持有成本的正常化 P/E＝成交後平均成本 ÷ 當時 cap_input 的 norm_eps（缺用 oe）；框架在每次持股增加時（買進成交、人工調整、對帳）更新（推論：多批建倉即建倉均價的 P/E）；讀不到 eps → 新持有期寫 null、否則保留舊值；拆合股不變。HOLD_REVIEW 以本次正常化 P/E 與此值比較（P-45 建倉 1.5 倍警報）",
+   "thesis_file": "state/theses/代號_YYYY-MM-DD.md（凍結，只能增補）；持股年度完整複查另立新版 代號_YYYY-MM-DD_v{n}.md（開頭記 predecessor），本欄指最新版，失效條件以最新版為準（D16）",
    "kill_criteria_due": [
     {
      "text": "失效條件原文",
-     "due": "YYYY-MM-DD（到期必檢）"
+     "due": "YYYY-MM-DD（到期必檢；due＝判斷所需證據可得後的檢查日。THESIS 檢查後由框架依輸出 next_due 前移）",
+     "checked_on": "YYYY-MM-DD（最近一次 THESIS 檢查日；框架寫）",
+     "status": "最近一次檢查結果：未觸發 | 接近 | 已觸發 | 無資料（框架寫）"
     }
    ],
-   "next_full_review_due": "YYYY-MM-DD（預設：下一份年報申報後，至遲 12 個月）"
+   "next_full_review_due": "YYYY-MM-DD（預設：下一份年報申報後，至遲 12 個月；紅燈 RED_LIGHT 延後＝決策日＋14 天）",
+   "observe_until": "HOLDING：P-50 觀察期限 YYYY-MM-DD（THESIS 疑似 → 決策日＋183 天，或 HOLD_REVIEW 給的期限）；到期 review_due 排 FULL 結案",
+   "integrity_reject": "true＝NEVER-04(a) 最高決策者誠信淘汰：現任決策者在位期間不重評，只有 8-K 5.02（董事或高階經理人異動）才排 FULL",
+   "asset_class": "非金融 | 銀行 | 保險 | 其他金融（P-32 減損：金融 50%、非金融 30%）",
+   "external_drivers": ["P-31 外部變數判定（受控詞彙 id）；null＝未判定；之後只能因新事實改判"],
+   "external_drivers_determined_on": "YYYY-MM-DD",
+   "external_drivers_basis": [{"driver": "id", "kill_criterion": "失效條件原文"}],
+   "corr_links": {"其他代號": {"variables": ["共同變數"], "determined_on": "YYYY-MM-DD", "removed_on": "YYYY-MM-DD（因新事實改判不同群時）"}}
   }
  ]
 }

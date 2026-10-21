@@ -34,6 +34,8 @@ def test_run_analyze_from_screen(tmp_path, monkeypatch):
     td = paths.work / run / "KO"
     (td / "dossier").mkdir(parents=True)
     (td / "sec").mkdir()
+    (td / "dossier").mkdir(parents=True, exist_ok=True)
+    (td / "dossier" / ".prep_done").write_text("ok\n", encoding="utf-8")  # 前置完成標記
     (td / "dossier" / "KO.md").write_text("# KO\n", encoding="utf-8")
     (td / "dossier" / "KO_price.json").write_text(json.dumps({"price": 60.5}), encoding="utf-8")
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from trader.data.http import DataError, HttpClient
+from trader.data.http import DataError, HttpClient, atomic_write_text
 
 API_URL = "https://api.stlouisfed.org/fred/series/observations"
 CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
@@ -51,8 +51,11 @@ class FredClient:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_age_s = max_age_hours * 3600
-        # 金鑰只放在 params；錯誤訊息經 secrets 遮罩
-        self.http = http or HttpClient(min_interval=0.2, secrets=[self.api_key])
+        self.warnings: list[str] = []  # 抓取失敗改用舊快取等非致命問題，供呼叫端記錄（M4-D7-5）
+        # 金鑰只放在 params；錯誤訊息經 secrets 遮罩。有金鑰時不跟隨轉址（帶金鑰的請求不送往轉址目標）；
+        # 無金鑰的公開 CSV 沒有秘密，維持跟隨
+        self.http = http or HttpClient(min_interval=0.2, secrets=[self.api_key],
+                                       follow_redirects=self.api_key is None)
 
     # ---- 抓取 ----
     def _fetch_api(self, series_id: str) -> list[list]:
@@ -96,21 +99,33 @@ class FredClient:
         s = pd.Series([v for _, v in obs], index=[d for d, _ in obs], dtype=float)
         return s.sort_index()
 
+    @staticmethod
+    def _read_cache(path: Path) -> list | None:
+        """讀快取；不存在或半截（解析失敗）回傳 None，視同沒有快取。"""
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
     def series(self, series_id: str = "DGS30") -> pd.Series:
         """回傳 float Series：index 為 YYYY-MM-DD 字串（升冪），值為原始百分比（如 4.75）。"""
         path = self.cache_dir / f"{series_id}.json"
         if path.exists() and (time.time() - path.stat().st_mtime) < self.max_age_s:
-            return self._to_series(json.loads(path.read_text(encoding="utf-8")))
+            cached = self._read_cache(path)
+            if cached is not None:
+                return self._to_series(cached)
         try:
             obs = self._fetch_api(series_id) if self.api_key else self._fetch_csv(series_id)
             if not obs:
                 raise DataError(f"FRED 無有效觀測值：{series_id}")
-        except Exception:
-            # 抓取失敗：有舊快取就用舊快取，否則把錯誤往上拋
-            if path.exists():
-                return self._to_series(json.loads(path.read_text(encoding="utf-8")))
+        except Exception as e:
+            # 抓取失敗：有可讀的舊快取就用舊快取（記警告），否則把錯誤往上拋
+            cached = self._read_cache(path)
+            if cached is not None:
+                self.warnings.append(f"{series_id} 抓取失敗（{type(e).__name__}），改用舊快取")
+                return self._to_series(cached)
             raise
-        path.write_text(json.dumps(obs), encoding="utf-8")
+        atomic_write_text(path, json.dumps(obs))
         return self._to_series(obs)
 
     # ---- 時點查詢（只用 asof 以前的資料，嚴格小於） ----
@@ -131,6 +146,14 @@ class FredClient:
             raise DataError(f"DGS30 在 {start} 至 {asof} 間無資料")
         return float(w.median()) / 100
 
+    def mean(self, series_id: str, asof: str, years: int) -> float:
+        """[asof 前 years 年, asof) 區間日值的平均（只用 < asof；原始單位，不換算）。P-58 浮存金成本對照用（M4-D5-07）。"""
+        s = self.series(series_id)
+        start = _years_before(asof, years)
+        w = s[(s.index >= start) & (s.index < asof)]
+        if w.empty:
+            raise DataError(f"{series_id} 在 {start} 至 {asof} 間無資料")
+        return float(w.mean())
 
     def latest(self, series_id: str, asof: str) -> tuple[float, str]:
         """最後一個日期 < asof 的原始值與日期（不換算單位）。"""

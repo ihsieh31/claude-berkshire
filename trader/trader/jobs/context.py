@@ -6,6 +6,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from ..models import JobSpec
 from .validate import load_schemas
@@ -28,6 +29,8 @@ _FILE_NOTE = (
     "要寫的檔案放在輸出 JSON 的 files：{檔名: 內容}，檔名相對於工作目錄，"
     "不得含 .. 或絕對路徑；內容為字串（或 JSON 物件，框架會以 JSON 寫出）。"
 )
+
+NO_PKG = "（本工作不提供規則檔）"   # {pkg} 預設值（處理器未覆寫時；A3-M3E-02）
 
 _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -67,13 +70,16 @@ SCHEMA_NOTE = ("讀法：`\"A | B | C\"` 表示從中擇一，值只能是其中
 
 
 def build_prompt(job: JobSpec, backend: str, max_tokens: int, pkg_root: Path,
-                 sections: list[Section] | None = None, values: dict[str, str] | None = None) -> str:
+                 sections: list[Section] | Callable[[], list[Section]] | None = None,
+                 values: dict[str, str] | None = None) -> str:
     """組成一個工作的完整提示。
 
     順序：_COMMON.md → prompts/{job_type}.md → output_schemas.json 該工作的節 → 輸入段落。
-    - backend == "claude_code"：輸入段落只列沙箱內的檔名，不內嵌內容（Claude Code 自己讀檔）。
-    - 其他 backend：內嵌 sections 文字，並說明輸出檔放在 files 欄位。
-    超過 max_tokens：依 droppable 由大到小整段刪除（同級依列表順序）；仍超過 → ContextOverflowError。
+    - backend == "claude_code"（代理式，正式路徑）：輸入段落只列沙箱內的檔名，不內嵌內容（Claude Code 自己讀檔）；
+      sections 不使用。sections 可為無參數函式（設計決策 D48：段落只在 API 後端才組，代理式不讀全文）。
+    - 其他 backend（API／fake）：內嵌 sections 文字，並說明輸出檔放在 files 欄位。
+      超過 max_tokens：依 droppable 由大到小整段刪除（同級依列表順序），並在提示末尾列出被刪的段落（D48）；
+      仍超過 → ContextOverflowError。
     """
     pkg_root = Path(pkg_root)
     prompts = pkg_root / "routing" / "prompts"
@@ -84,7 +90,8 @@ def build_prompt(job: JobSpec, backend: str, max_tokens: int, pkg_root: Path,
         raise ValueError(f"output_schemas.json 沒有 {job.job_type} 這一節")
 
     vals = {
-        "pkg": str(pkg_root),
+        # 預設不給真實專案根（含 state）：需要規則檔的處理器以 prompt_values 指向沙箱內 pkg/（A3-M3E-02）
+        "pkg": NO_PKG,
         "asof": job.asof,
         "ticker": job.ticker,
         "work": str(job.sandbox) if job.sandbox else "",
@@ -93,8 +100,10 @@ def build_prompt(job: JobSpec, backend: str, max_tokens: int, pkg_root: Path,
 
     head = (render_template(common, vals).rstrip() + "\n\n"
             + render_template(template, vals).rstrip())
+    # 輸出格式也代入 {ticker} 等（files 範例寫成 {ticker}/report_A.md；M5_D10-08）
     schema_part = (f"## 輸出格式（{job.job_type}）\n```json\n"
-                   + json.dumps(schemas[job.job_type], ensure_ascii=False, indent=2) + "\n```\n" + SCHEMA_NOTE)
+                   + render_template(json.dumps(schemas[job.job_type], ensure_ascii=False, indent=2), vals)
+                   + "\n```\n" + SCHEMA_NOTE)
 
     if backend == "claude_code":
         listing = "\n".join(f"- {f}" for f in _sandbox_files(job.sandbox)) or "（無）"
@@ -104,11 +113,15 @@ def build_prompt(job: JobSpec, backend: str, max_tokens: int, pkg_root: Path,
                 f"{job.job_type} 提示估 {estimate_tokens(text)} tokens，超過上限 {max_tokens}")
         return text
 
-    secs = list(sections or [])
+    secs = list((sections() if callable(sections) else sections) or [])
 
     def build(keep: list[int]) -> str:
         parts = [head, schema_part, _FILE_NOTE]
         parts += [f"## {secs[i].name}\n{secs[i].text}" for i in keep]
+        dropped = [secs[i].name for i in range(len(secs)) if i not in keep]
+        if dropped:   # D48：刪段要標示，模型與日誌才知道少了哪些規則或原文
+            parts.append("## 已刪段落（提示超過上限，以下段落未附；相關規則以 SKILL.md 為準，無法判斷處照實標缺）\n"
+                         + "\n".join(f"- {n}" for n in dropped))
         return "\n\n".join(parts)
 
     keep = list(range(len(secs)))

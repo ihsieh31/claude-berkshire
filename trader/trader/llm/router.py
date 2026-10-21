@@ -22,6 +22,9 @@ def build_runner(tier: TierConfig, extra_deny: list[str] | None = None, state_di
         return ClaudeCodeRunner(tier, denies=deny_roots(extra_deny, state_dir))
     if tier.backend == "openai_compat":
         return OpenAICompatRunner(tier)
+    if tier.backend == "hark_queue":
+        from .hark_queue import HarkQueueRunner  # 延遲匯入：只有選用 hark_queue 時才需要此模組（D55）
+        return HarkQueueRunner(tier, denies=deny_roots(extra_deny, state_dir))
     if tier.backend == "fake":
         return FakeRunner(model=tier.model)
     raise ValueError(f"未知的 backend：{tier.backend!r}")
@@ -67,6 +70,13 @@ class Router:
             self._runners[tier] = build_runner(self.tier_config(tier), getattr(getattr(self.config, "sandbox", None), "extra_deny", None),
                                                self.state_dir)
         return self._runners[tier]
+
+    def cancel_all(self) -> None:
+        """引擎被中斷時：請已建立的 Runner 結束執行中的呼叫（有 cancel 方法者，例如 claude_code 結束子行程群組）。"""
+        for r in list(self._runners.values()) + ([self._fake] if self._fake is not None else []):
+            cancel = getattr(r, "cancel", None)
+            if callable(cancel):
+                cancel()
 
     def tier_config(self, tier: str) -> TierConfig:
         try:

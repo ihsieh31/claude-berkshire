@@ -1,7 +1,10 @@
 """工作處理器（代理 D）：每種工作的沙箱準備、輸出收集，以及後續工作的動態升級。
 
-升級規則來源：routing/model_routing.json 的 next／escalate 欄位。
-後置腳本（gate3_check、cap_calc、build_dossier）在 M3 才實作，這裡只留 pre_script／post_script 掛鉤，預設不做事。
+升級規則以本模組與各工作處理器（deep.py、review_jobs.py、hold_jobs.py 等）的程式為準；routing/model_routing.json 的 next／escalate 只是說明文字。
+掛鉤：pre_script（工作執行前，例如 build_dossier、cap_calc 重算）；post（收輸出、後置檢查與回寫，回傳後續工作）；
+on_invalid（輸出重試後仍不合格：寫保守結論或回傳替代工作 → 引擎標 conservative_fallback，設計決策 D43）；
+on_fail（路由、準備、傳輸、後置例外、依賴跳過等非格式失敗的保守紀錄，預設不做事，M5_D4-06）。
+on_invalid／on_fail 回傳的替代工作，引擎一律拿掉對本工作的依賴（M5-D1-01）。
 
 檔案位置約定：
 - 工作沙箱：{work}/{run_id}/{ticker}/_{job_type}_{n}（由 sandbox.create_sandbox 建立）
@@ -10,17 +13,17 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import db
 from ..models import JobSpec
 from ..paths import Paths
 from .context import Section
-from .sandbox import collect_outputs, create_sandbox, open_price_file, stage_inputs, ticker_dir
+from .sandbox import create_sandbox, open_price_file, stage_inputs, ticker_dir
 
 
 @dataclass
@@ -32,6 +35,7 @@ class HandlerCtx:
     sandbox_root: Path | None = None   # 沙箱根目錄（claude_code 時在隔離位置）；None＝work_dir
     config: Any = None
     sec: Any = None                    # SecClient（DOSSIER 前置用；pipeline 注入）
+    prices: Any = None                 # 研究用價格客戶端（P-30 日線；pipeline 注入，M4-R3-02）
 
     @property
     def sandbox_base(self) -> Path:
@@ -47,8 +51,13 @@ class HandlerCtx:
 
 
 def next_job(job: JobSpec, job_type: str, ctx: HandlerCtx, params: dict[str, Any] | None = None) -> JobSpec:
-    """建立由 job 動態升級而來的新工作；依賴 job；params 附上建立時間（FULL_B 的開檔檢查用）。"""
-    n = ctx.next_seq(job, job_type)
+    """建立由 job 動態升級而來的新工作；依賴 job；params 附上建立時間（FULL_B 的開檔檢查用）。
+    job 已產生過同類型的後續工作（post 重跑：jobs retry、續跑）→ 沿用其 job_id，讓 add_job 去重（M5-D1-02）。"""
+    row = ctx.conn.execute(
+        "SELECT job_id FROM jobs WHERE run_id=? AND ticker=? AND job_type=? AND deps IN (?, ?) ORDER BY rowid LIMIT 1",
+        (job.run_id, job.ticker, job_type, json.dumps([job.job_id]), json.dumps([job.job_id], ensure_ascii=False))
+    ).fetchone()
+    n = row[0].rsplit(":", 1)[-1] if row is not None else ctx.next_seq(job, job_type)
     p = dict(params or {})
     p.setdefault("created_ts", time.time())
     return JobSpec(
@@ -99,9 +108,7 @@ class Handler:
         return _sections(sandbox, names)
 
     def post(self, job: JobSpec, result: dict, ctx: HandlerCtx) -> list[JobSpec]:
-        names = [n for n in (result.get("files") or []) if isinstance(n, str)]
-        if names and job.sandbox is not None:
-            collect_outputs(job.sandbox, ticker_dir(ctx.work_dir, job), names)
+        # 不依模型 files 清單收檔：要收檔的子類各自只收固定檔名（模型可列任意檔名植入同檔輸出區；A3-M3E-02）
         return self.next_jobs(job, result, ctx)
 
     def next_jobs(self, job: JobSpec, result: dict, ctx: HandlerCtx) -> list[JobSpec]:
@@ -109,18 +116,13 @@ class Handler:
         return []
 
     def on_invalid(self, job: JobSpec, errors: list[str], ctx: HandlerCtx) -> list[JobSpec]:
-        """重試後仍不合格：決策日誌記 NO_ACTION／MISSING_DATA，不以模型自由文字取代。回傳替代的後續工作（不依賴本工作）。"""
-        db.insert(ctx.conn, "decisions", {
-            "decision_id": job.job_id,  # 每個工作唯一；正式決策編號格式於 M3 再定
-            "ticker": job.ticker,
-            "decision_date": job.asof,
-            "run_id": job.run_id,
-            "job_id": job.job_id,
-            "signal": "NO_ACTION",
-            "reason_code": "MISSING_DATA",
-            "data": {"job_type": job.job_type, "errors": list(errors)},
-            "created_at": db.now_iso(),
-        })
+        """重試後仍不合格：寫該工作的保守結論（不以模型自由文字取代），回傳替代的後續工作（引擎會拿掉對本工作的依賴）。
+        每個處理器必須自己實作；沒有實作 → 引擎把工作標 failed（真正的失敗），不寫任何決策（M5-D8-05）。"""
+        raise NotImplementedError(f"{job.job_type} 沒有不合格輸出的保守處理")
+
+    def on_fail(self, job: JobSpec, error: str, ctx: HandlerCtx) -> list[JobSpec]:
+        """非格式失敗（工作仍記 failed／skipped）時的保守紀錄；回傳替代工作。預設不做事，
+        由引擎 run 結束時的 finalize_run 收尾（設計決策 D46）。"""
         return []
 
     def prompt_values(self, job: JobSpec, ctx: HandlerCtx, backend: str) -> dict[str, str]:
@@ -132,12 +134,8 @@ class Handler:
         return ""
 
     def pre_script(self, job: JobSpec, ctx: HandlerCtx) -> None:
-        """M3 掛鉤：工作執行前的腳本（M0 不做事）。"""
+        """工作執行前的腳本（預設不做事）。"""
         return None
-
-    def post_script(self, job: JobSpec, ctx: HandlerCtx) -> list[str]:
-        """M3 掛鉤：工作完成後的腳本檢查，回傳錯誤清單（M0 不做事）。"""
-        return []
 
 
 from .deep import DossierHandler, FullAHandler, FullBHandler, RedTeamHandler  # noqa: E402  （deep 依賴上方的 Handler）

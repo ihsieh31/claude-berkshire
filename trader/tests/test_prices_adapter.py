@@ -170,14 +170,14 @@ def test_fetch_price_inputs_end_to_end(aaa):
                         [dict(SPLIT_ACTION)])
     out = PA.fetch_price_inputs(client, ["AAA", "zzz"], ASOF, years=4)
     adjs = [c[4] for c in client.calls if c[0] == "bars"]
-    assert adjs == ["raw", "all", "split"]
+    assert adjs == ["raw", "all"]   # 不再抓拆股調整日線（M4-R3-01）
     start = [c[2] for c in client.calls if c[0] == "bars"][0]
     assert start == "2022-10-15"
-    assert set(out) == {"prices", "daily", "actions", "raw"}
+    assert set(out) == {"prices", "actions", "raw", "notes"} and out["notes"] == []
     prices = out["prices"].set_index("ticker")
     assert prices.loc["AAA", "price_src"] == "alpaca"
     assert prices.loc["ZZZ", "price_src"] == "失敗：無資料"   # 沒有資料的代號也要列出
-    assert len(out["daily"]) > 0 and set(out["daily"]["ticker"]) == {"AAA"}
+    assert "daily" not in out
 
 
 def test_split_on_asof_excluded_when_price_is_previous_close():

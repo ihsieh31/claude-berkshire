@@ -66,9 +66,10 @@ def screen(df, decision_date=None):
         # J3 資本結構無法存活：權益 ≤0 且最近一年虧損
         'J3_權益為負且虧損': (d.shareholders_equity <= 0) & (d.net_income < 0),
         # J4 一年虧損吃掉一半以上權益（獲利能力無法吸收損失＝非暫時性）
-        # 例外：此前經濟力佳（5 年虧損 ≤1 年且 5 年 ROE 中位 ≥12%）→ 不刪，改走困境通道
+        # 例外：此前經濟力佳（5 年虧損 ≤1 年且 5 年 ROE 中位 ≥12%）→ 不刪，改走困境通道；
+        # 例外所需的歷史缺值 → 無法判定，也不刪（缺資料永遠不是刪除理由；虧損本身已標 T1）
         'J4_虧損腰斬權益': (d.net_income < 0) & (d.eq_prev > 0) & (d.shareholders_equity < 0.5 * d.eq_prev)
-                         & ~((d.loss_yrs5 <= 1) & (d.roe_med5 >= 0.12)),
+                         & ~(((d.loss_yrs5 <= 1) & (d.roe_med5 >= 0.12)) | d.loss_yrs5.isna() | d.roe_med5.isna()),
         # J7 連兩年虧損且 5 年淨利合計 < 0
         'J7_連虧且累虧': (d.net_income < 0) & (d.ni_prev < 0) & (d.ni_sum5 < 0),
     }

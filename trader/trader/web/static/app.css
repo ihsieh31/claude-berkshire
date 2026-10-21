@@ -192,6 +192,7 @@ th.n, td.n { text-align: right; white-space: nowrap; }
 td.n { font-size: 13.5px; }
 tr.click { cursor: pointer; }
 td.wrap { max-width: 380px; color: var(--ink-2); line-height: 1.5; }
+div.wrap { max-width: 380px; white-space: normal; }   /* 公司行動 hint（app.js 待人工公司行動列 div.sub.wrap） */
 .tk { font: 600 13px var(--display); letter-spacing: 0.01em; }
 .wbar { display: inline-block; width: 56px; height: 3px; border-radius: 2px; background: var(--line); vertical-align: middle; margin-right: 8px; overflow: hidden; }
 .wbar > span { display: block; height: 100%; background: var(--ink-2); }

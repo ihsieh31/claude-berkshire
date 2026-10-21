@@ -30,17 +30,22 @@ def load_config(path: str | Path | None = None, env_file: str | Path | None = No
 - `path` 預設：環境變數 `TRADER_CONFIG` → `{PROJECT_DIR}/config.yaml`。檔案不存在 → ConfigError（提示 `cp config.example.yaml config.yaml`）。
 - `env_file` 預設 `{PROJECT_DIR}/.env`，存在才讀。
 - 驗證：`models` 必須有 strong／medium／weak；backend ∈ BACKENDS；openai_compat 需 base_url、api_key_env、model；claude_code、fake 需 model；任一 tier 出現 `api_key` 鍵（明文金鑰）→ 錯誤；`job_tier_overrides` 的鍵 ∈ JOB_TYPES、值 ∈ TIERS；未知頂層鍵 → 錯誤。
-- `schedule` 預設：`{"timezone":"America/New_York","daily_close":"17:30","review_holdings":"daily","review_watch":"biweekly","quarterly_screen":["02-20","05-20","08-20","11-20"],"monthly_freeze":"01"}`，使用者設定覆蓋同名鍵。
+- `schedule` 預設：`{"timezone":"America/New_York","daily_close":"17:30","review_watch":"biweekly","quarterly_screen":["03-20","05-20","08-20","11-20"],"monthly_freeze":"01"}`，使用者設定覆蓋同名鍵；載入時驗證（timezone 為有效 IANA 時區、daily_close 為 `"HH:MM"` 字串（未加引號被 YAML 讀成整數時提示加引號）、quarterly_screen 為 `"MM-DD"` 清單、monthly_freeze 1–28、review_watch ∈ biweekly｜weekly、未知鍵 → 錯誤）。持股固定每日隨 daily 檢查：`review_holdings` 只接受 daily（其他值報錯）。
+- `universe` 只接受 `sp500`（其他值 → 錯誤；自訂名單用 `state/universe_override.txt`）。設定檔路徑一律解析為絕對路徑（`source_path`）。
 
 ## trader/db.py（代理 A）
 
 ```python
-MIGRATIONS: list[str]                 # 第 i 個字串 = 版本 i+1 的 SQL（executescript）
+MIGRATIONS: list[str]                 # 第 i 個字串 = 版本 i+1 的 SQL（逐敘述執行）
 def connect(path: Path) -> sqlite3.Connection   # row_factory=sqlite3.Row；PRAGMA journal_mode=WAL、foreign_keys=ON、busy_timeout=5000；自動建父目錄
-def migrate(conn) -> int              # 套用尚未套用的版本，回傳目前版本；冪等
+def migrate(conn) -> int              # 套用尚未套用的版本，回傳目前版本；冪等。BEGIN IMMEDIATE 取寫鎖後在交易內重讀版本（多行程同時 migrate 安全）；DB 版本比程式新 → RuntimeError
 def now_iso() -> str                  # UTC ISO8601，秒精度，結尾 Z
 def insert(conn, table: str, row: dict) -> int        # 回傳 lastrowid；dict/list 值自動 json.dumps
 def upsert(conn, table: str, row: dict, key: list[str]) -> None   # INSERT ... ON CONFLICT(key) DO UPDATE
+BACKUP_KEEP = 14
+def backup(db_path: Path, note: str | None = None, keep: int = BACKUP_KEEP) -> Path
+    # 本機快照（`trader db backup`；排程 daily 成功後自動呼叫）：PRAGMA integrity_check 非 ok → 寫 db_integrity 異常並 RuntimeError（不寫、不刪舊快照）；
+    # 否則以 sqlite backup API 寫 {db 目錄}/backups/trader-YYYYMMDD-HHMMSS[-note].db（本機時間），保留最近 keep 份＋每月最早一份；回傳快照路徑
 ```
 版本 1 的表（欄位照抄；JSON 欄位存 TEXT）：
 ```sql
@@ -73,12 +78,24 @@ anomalies(anomaly_id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, kind TEXT N
      pause_trading INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, resolved_at TEXT, resolution TEXT)
 universe_versions(version_id INTEGER PRIMARY KEY AUTOINCREMENT, asof TEXT NOT NULL, source TEXT, tickers TEXT NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL)
 ```
+版本 2（M6，opus 同意閘門；同一 run 同一檔至多一列）：
+```sql
+approvals(approval_id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, run_id TEXT NOT NULL, asof TEXT NOT NULL,
+     job_id TEXT NOT NULL, job_type TEXT NOT NULL, tier TEXT, holding INTEGER NOT NULL DEFAULT 0, reason TEXT,
+     status TEXT NOT NULL CHECK(status IN ('pending','deferred','approved','rejected','superseded','done')),
+     created_at TEXT NOT NULL, decided_at TEXT, decided_via TEXT, note TEXT, UNIQUE(run_id, ticker))  + INDEX approvals_status ON approvals(status)
+```
+版本 3（D51，決策來源欄）：
+```sql
+ALTER TABLE decisions ADD COLUMN provenance TEXT   -- JSON（例 {"origin":..,"backend":..,"effort":..,"price_source":..}），NULL＝未標記；由產生／匯出資料的一方填寫，框架不解讀
+```
 
 ## trader/cli.py（代理 A）
 
 argparse 子命令；`main(argv: list[str] | None = None) -> int`；共用參數 `--config`、`--state-dir`。
 - `init`：`paths.ensure()`；DB migrate；印出版本；設定檔不存在 → 提示複製範例並回 1；列出缺少的環境變數（各 tier 的 api_key_env、SEC／Alpaca／FRED）為「警告」不失敗；SEC_USER_AGENT 有值但不含 `@` → 警告；任一 tier backend=claude_code 時用 `shutil.which(tier.claude_bin)` 檢查。全部 OK 回 0。
-- `doctor [--skip-models] [--timeout 10]`：逐項印 `[OK]/[FAIL]/[SKIP] 名稱 說明`。網路項：SEC（GET `https://www.sec.gov/files/company_tickers.json`，header User-Agent=環境變數值；沒設 → SKIP）、Alpaca（GET `https://paper-api.alpaca.markets/v2/clock`，header APCA-API-KEY-ID／APCA-API-SECRET-KEY；沒設 → SKIP）、FRED（GET `https://api.stlouisfed.org/fred/series?series_id=DGS30&api_key=..&file_type=json`；沒設 → SKIP）。模型項：除非 `--skip-models`，對每個 tier 建 `JobSpec(job_type="DOSSIER", ticker="DOCTOR", ...)`，`prompt_text='只回覆 JSON：{"ok": true}'`，用 `trader.llm.router.build_runner(tier_cfg)` 跑一次（`call_with_retry(retries=0)`），抽得 `{"ok": true}` → OK。HTTP 用 httpx；可注入 `http_get` 以便測試。任一 FAIL 回 1。
+- `doctor [--skip-models] [--timeout 10] [--state]`：逐項印 `[OK]/[FAIL]/[SKIP] 名稱 說明`。網路項：SEC（GET `https://www.sec.gov/files/company_tickers.json`，header User-Agent=環境變數值；沒設 → SKIP）、Alpaca（GET `https://paper-api.alpaca.markets/v2/clock`，header APCA-API-KEY-ID／APCA-API-SECRET-KEY；沒設 → SKIP）、FRED（GET `https://api.stlouisfed.org/fred/series?series_id=DGS30&api_key=..&file_type=json`；沒設 → SKIP）。模型項：除非 `--skip-models`，對每個 tier 建 `JobSpec(job_type="DOSSIER", ticker="DOCTOR", ...)`，`prompt_text='只回覆 JSON：{"ok": true}'`，用 `trader.llm.router.build_runner(tier_cfg)` 跑一次（`call_with_retry(retries=0)`），抽得 `{"ok": true}` → OK。代理式後端（claude_code、hark_queue）的沙箱建在隔離根（`sandbox.root` 或平台預設）下的 `doctor-*` 子目錄、用完刪除，`build_runner(tier, sandbox.extra_deny, state_dir)`。HTTP 用 httpx；可注入 `http_get` 以便測試。任一 FAIL 回 1。
+- `doctor --state [--state-dir D]`：只檢查本機 state（唯讀、不需設定檔、略過網路與模型）：integrity_check、schema 版本 ≤ 程式、待執行工作／待同意＝0、failed 分析工作未寫回＝0（CORP_ACTION 與已補寫回的歷史列 WARN）、決策／訊號卡一致、論點檔與 cap_inputs 存在、scheduler.json 的 last_screen（缺 → WARN）與 gave_up（非空 → FAIL）。換機程序 §2.2／§3.5 使用。
 - `run-job JOB_TYPE TICKER --asof DATE [--fake FIXTURE_DIR]`：建一個 run（`run_id=f"manual-{asof}"`）並以 engine 跑單一工作（M0 只需支援 `--fake`；未給 → 印「M3 才支援真實工作」回 2）。engine 由代理 D 實作；cli 以延遲匯入 `from trader.jobs.engine import Engine`。
 - 其他（`bootstrap screen review daily scheduler dashboard export ledger validate-report`）：先註冊子命令與 plan.md §11 列的參數，執行時印「尚未實作（里程碑 Mx）」回 2。
 

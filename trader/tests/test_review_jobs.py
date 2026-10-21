@@ -103,7 +103,7 @@ def _auto_cap() -> float:
 
 def _price_params(**kw) -> dict:
     p = {"price": PRICE_NOW, "price_date": "2026-10-15", "rates": {"t30": 0.047, "t30_20y_median": 0.035},
-         "largecap_pe": {"pe_norm_median": 19.0, "fin_pe_norm_median": 15.0},
+         "largecap_pe": {"pe_norm_median": 19.0, "pe_ttm_median": 19.0, "fin_pe_norm_median": 15.0},  # D60：取 pe_ttm_median（P19）
          "portfolio_state": {"cash": 100000, "holdings": []}, "screen_context": {"screen_decision": "PASS"}}
     p.update(kw)
     return p
@@ -116,9 +116,10 @@ def _gate3_row(conn, decision_date: str = ASOF, passed: bool = True) -> None:
         "data": {"action": "WATCH", "gate3_pass": passed}, "created_at": db.now_iso()})
 
 
-def _run_price(paths, conn, params: dict, result: dict):
-    """PRICE 的 pre_script → post（不經引擎）。回傳 (job, 後續工作清單)。"""
-    job = _job("PRICE", params)
+def _run_price(paths, conn, params: dict, result: dict, n: int = 1):
+    """PRICE 的 pre_script → post（不經引擎）。回傳 (job, 後續工作清單)。同一測試跑第二個 PRICE 工作時給不同的 n：
+    同一 job_id 重放 post 只回寫一次（M6-D9-03）。"""
+    job = _job("PRICE", params, n=n)
     h, ctx = PriceHandler(), _ctx(paths, conn)
     h.pre_script(job, ctx)
     nxt = h.post(job, result, ctx)
@@ -128,7 +129,7 @@ def _run_price(paths, conn, params: dict, result: dict):
 def _price_result(**kw) -> dict:
     r = {"ticker": "KO", "price": 999.0, "auto_buy_cap": 999.0, "sell_review_above": 1.0, "absurd_price_line": 1.0,
          "gates": {"gate1_screen": "通過", "gate2_price_lt_cap": "通過", "gate3_on_file": "通過"},
-         "proposed_action": "NO_CHANGE", "needs_full": False, "reason": "測試"}
+         "proposed_action": "NO_CHANGE", "needs_full": False, "g9_contrarian": "反方：估值已不便宜", "g10_still_valid": True, "reason": "測試"}
     r.update(kw)
     return r
 
@@ -314,11 +315,15 @@ def test_upgrade_chain_thesis_to_dossier_resets_created_ts(env):
 
 # ---------------------------------------------------------------- THESIS 回寫
 
-def thesis_result(verdict: str, *, hit: bool = False) -> dict:
-    return {"ticker": "KO", "verdict": verdict,
-            "kill_criteria_status": [{"criterion": "毛利率連兩季下滑",
-                                      "status": "已觸發" if hit else "未觸發", "evidence": "10-Q 2026-10-01"}],
-            "r_list_status": [{"item": "R1", "status": "無變化", "evidence": "測試"}], "new_facts": ["新事實 A"], "reason": "測試理由"}
+def thesis_result(verdict: str, *, hit: bool = False, falsify: bool = False) -> dict:
+    r = {"ticker": "KO", "verdict": verdict,
+         "kill_criteria_status": [{"criterion": "毛利率連兩季下滑",
+                                   "status": "已觸發" if hit else "未觸發", "evidence": "10-Q 2026-10-01"}],
+         "r_list_status": [{"item": "R1", "status": "無變化", "evidence": "測試"}], "new_facts": ["新事實 A"], "reason": "測試理由"}
+    if falsify:   # D02：證偽附理由類型、K 編號與證據（日期早於 ASOF），框架核對才會通過
+        r.update(falsify_type="CONDITION_TRIGGERED", condition_id="K1",
+                 evidence=[{"source": "10-Q 2026-10-01", "date": "2026-10-01"}])
+    return r
 
 
 def test_thesis_watch_for_non_holding_and_merges_registry(env):
@@ -336,13 +341,18 @@ def test_thesis_watch_for_non_holding_and_merges_registry(env):
     assert reg["status"] == "WATCH"
 
 
-@pytest.mark.parametrize("verdict,expected", [("完好", "HOLD"), ("疑似", "HOLD"), ("證偽", "SELL_ALL")])
-def test_thesis_holding_action_mapping(env, verdict, expected):
+@pytest.mark.parametrize("verdict,expected,falsify", [
+    pytest.param("完好", "HOLD", False, id="完好-HOLD"), pytest.param("疑似", "HOLD", False, id="疑似-HOLD"),
+    # 證偽且核對通過（失效條件 K1 已觸發、附來源與日期）→ SELL_ALL；缺 falsify 欄位 → D02 降為疑似（HOLD）
+    pytest.param("證偽", "SELL_ALL", True, id="證偽-SELL_ALL"),
+    pytest.param("證偽", "HOLD", False, id="證偽未附核對欄位-HOLD")])
+def test_thesis_holding_action_mapping(env, verdict, expected, falsify):
     paths, conn = env
     _seed_registry(conn, "KO", "HOLDING", {"cost": 100.0, "weight": 0.05})
-    job = _job("THESIS", _price_params())
-    ThesisHandler().post(job, thesis_result(verdict), _ctx(paths, conn))
+    job = _job("THESIS", _price_params(kill_criteria=["毛利率連兩季下滑"]))
+    ThesisHandler().post(job, thesis_result(verdict, hit=falsify, falsify=falsify), _ctx(paths, conn))
     assert _decisions(conn)[0]["data"]["action"] == expected
+    assert _decisions(conn)[0]["data"]["thesis_check"] == ("證偽" if expected == "SELL_ALL" else verdict if verdict != "證偽" else "疑似")
     assert _reg(conn)["status"] == "HOLDING"  # 持有狀態由帳本管理，不被論點檢查改寫
     assert _reg(conn)["data"]["cost"] == 100.0
 
@@ -414,7 +424,8 @@ def test_price_buy_when_all_gates_pass_for_watch(env):
 def _full_decision(conn, decision_date: str, price: float, cap: float, signal: str = "WATCH") -> None:
     did = f"KO:{decision_date}:full"
     db.insert(conn, "decisions", {"decision_id": did, "ticker": "KO", "decision_date": decision_date, "run_id": "r",
-                                  "job_id": None, "signal": signal, "reason_code": "X", "data": {"action": signal},
+                                  "job_id": None, "signal": signal, "reason_code": "X",
+                                  "data": {"action": signal, "price": price, "auto_buy_cap": cap},
                                   "created_at": decision_date + "T00:00:00Z"})
     db.insert(conn, "signals", {"decision_id": did, "ticker": "KO", "signal": signal,
                                 "data": {"signal": signal, "price": price, "auto_buy_cap": cap},
@@ -456,27 +467,37 @@ def test_price_needs_full_from_model_goes_to_dossier(env):
     assert [j.job_type for j in nxt] == ["DOSSIER"]
 
 
-@pytest.mark.parametrize("days,expected", [(100, "HOLD"), (400, "TRIM")])
-def test_price_sell_half_respects_one_year_rule(env, days, expected):
+@pytest.mark.parametrize("days", [100, 400])
+def test_price_sell_half_respects_one_year_rule(env, days):
+    # 設計決策 D03／D28：PRICE 不寫 TRIM；SELL_HALF 只記日誌（現價 60.5 遠低於荒謬級線與 IV_base → HOLD、不交 HOLD_REVIEW）
     paths, conn = env
     _write_cap_input(paths)
     first = (date.fromisoformat(ASOF) - timedelta(days=days)).isoformat()
     _seed_registry(conn, "KO", "HOLDING", {"first_buy_date": first, "weight": 0.05, "target_weight": 0.05})
-    _run_price(paths, conn, _price_params(), _price_result(proposed_action="SELL_HALF"))
-    assert _decisions(conn)[-1]["data"]["action"] == expected
+    _, nxt = _run_price(paths, conn, _price_params(), _price_result(proposed_action="SELL_HALF"))
+    assert _decisions(conn)[-1]["data"]["action"] == "HOLD" and nxt == []
+    assert all(d["data"]["action"] != "TRIM" for d in _decisions(conn))
 
 
 def test_price_sell_review_is_hold_with_note(env):
+    # 設計決策 D28：模型的 SELL_REVIEW 不採信；由框架依現價 ≥ IV_base 判定是否交 HOLD_REVIEW
     paths, conn = env
     _write_cap_input(paths)
     _seed_registry(conn, "KO", "HOLDING", {"first_buy_date": "2020-01-01"})
+    with __import__("tempfile").TemporaryDirectory() as t:
+        f = Path(t) / "c.json"
+        f.write_text(json.dumps(CAP_INPUT), encoding="utf-8")
+        iv = run_cap_calc(f)["IV_base"]
     _, nxt = _run_price(paths, conn, _price_params(), _price_result(proposed_action="SELL_REVIEW"))
+    assert PRICE_NOW < iv and nxt == [] and _decisions(conn)[-1]["data"]["action"] == "HOLD"   # 現價 < IV_base：不送
+    px = iv * 1.1
+    _, nxt = _run_price(paths, conn, _price_params(price=px), _price_result(proposed_action="SELL_REVIEW"), n=2)
     dec = _decisions(conn)[-1]["data"]
     assert dec["action"] == "HOLD"
     assert any("交 HOLD_REVIEW" in n for n in dec["framework_notes"])
     # SKILL §6 第 2 條：交賣出決策樹（HOLD_REVIEW），帶入現價
     assert [j.job_type for j in nxt] == ["HOLD_REVIEW"] and nxt[0].params["full_stage"] == "PRICE"
-    assert nxt[0].params["price"] == pytest.approx(_price_params()["price"])
+    assert nxt[0].params["price"] == pytest.approx(px)
 
 
 def test_price_holding_above_iv_base_goes_to_hold_review_even_without_proposal(env):
@@ -575,7 +596,8 @@ def test_full_result_saves_cap_input(env, tmp_path):
 
     saved = paths.state / "cap_inputs" / "KO.json"
     assert json.loads(saved.read_text(encoding="utf-8")) == CAP_INPUT
-    assert _reg(conn)["data"]["cap_input_file"] == str(saved)
+    assert _reg(conn)["data"]["cap_input_file"] == "cap_inputs/KO.json"   # 相對 state（M8-R4-01）
+    assert saved.is_file()
 
 
 def test_full_result_without_cap_input_keeps_existing_state(env, tmp_path):

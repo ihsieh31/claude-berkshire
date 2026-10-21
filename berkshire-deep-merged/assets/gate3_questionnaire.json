@@ -1,7 +1,7 @@
 {
- "_說明": "閘門 3：能力圈與護城河固定問卷。題目、選項與通過條件固定，不得增刪改；每題必須記錄 answer、reason（一到三句）、evidence（至少一筆：來源＋日期，日期須早於決策日）。由 scripts/gate3_check.py 驗證。題目全部取自既有規則（規則書 P-01、SEL-051、SEL-055、SEL-061～066；references/procedure/01_competence_moat.md），不是新門檻。 每題都可答「不知道」（缺資料或看不懂），一律不通過。作答檔另須記錄 answered_at 與 price_file_opened_at（第一次開啟價格檔的時間，必須晚於 answered_at）。",
+ "_說明": "閘門 3：能力圈與護城河固定問卷。題目、選項與通過條件固定，不得增刪改；每題必須記錄 answer、reason（一到三句）、evidence（至少一筆：來源＋日期，日期須早於決策日）。由 scripts/gate3_check.py 驗證。題目全部取自既有規則（規則書 P-01、SEL-051、SEL-055、SEL-061～066；references/procedure/01_competence_moat.md），不是新門檻。 C2–C4、M1–M4 可答「不知道」（缺資料或看不懂），一律不通過（落入太難）；C1、C5、M5、M6 沒有「不知道」選項（不改題目＝不改門檻），資料不足時選最保守的選項（C1 寫不到5年、C5 屬於且加嚴條件未全部成立、M5 變窄、M6 可怕）並在 reason 註明資料不足。evidence.date＝該文件的 SEC 申報日 filingDate（非 SEC 文件用發布日），不是報告期末日；只能引用資料包已收錄的文件（決策日前已申報者）。作答檔另須記錄 answered_at；price_file_opened_at 在正式流程（FULL_A）留空：作答先於看價由框架以檔案時間保證（FULL_B 開價格檔前核對作答檔時間早於開檔時間，開檔時間記在 price_file_opened_at.txt，路徑寫進決策日誌），只有人工作答時才填（須晚於 answered_at）。證據日期與決策日一律寫 YYYY-MM-DD；決策日以框架給的決策日為準。",
  "schema": "berkshire-deep-merged/gate3-v1",
- "version": "2",
+ "version": "3",
  "questions": [
   {
    "id": "C1",
@@ -67,7 +67,7 @@
   {
    "id": "C5",
    "section": "能力圈",
-   "text": "屬於預設太難類嗎（快速持續變動、無獲利紀錄、取決於技術路線或政治結果）？若是，SEL-051 加嚴條件是否全部成立？",
+   "text": "屬於預設太難類嗎（快速持續變動、無獲利紀錄、取決於技術路線或政治結果）？若是，SEL-051 加嚴條件是否全部成立？「快速持續變動」只依規則書 G1 操作定義（推論），符合任一：①主要競爭者近 3 年有新進入者取得 ≥10% 市占；②核心產品單位價格近 3 個財年中 ≥2 年下降 >15%，且不是商品價格循環；③年報風險因素具名某替代技術，且該技術已在侵蝕核心營收（泛用樣板句不算）。單位量變動與一般技術替代字樣不算；商品循環依 SEL-050 清單與 SEL-051 第 4 點。SEL-051 第 3 點的 W-LOSS 依 P-02 口徑（週期谷底、可切除的一次性虧損不算）。",
    "answer_type": "enum",
    "choices": [
     "不屬於",
@@ -191,10 +191,10 @@
     "M3"
    ],
    "min": 2,
-   "rule": "護城河核心三測至少兩項為強（references/01_competence_moat.md §4）"
+   "rule": "護城河核心三測至少兩項為強（references/procedure/01_competence_moat.md §4）"
   },
   "price_seen_before_answering": false,
   "evidence_dates_before_decision_date": true
  },
- "grade_link": "C1＝10年寫得出 才可 A；5到10年 最高 B（P-01）。M6＝良好 → 降一級（SEL-055）。問卷通過不提高等級（規則書 第 0 節第 9 點）。"
+ "grade_link": "C1＝10年寫得出 才可 A；5到10年 最高 B（P-01）。M6＝良好 → 降一級（SEL-055）只適用非小資金模式；本系統（宿主模式＝小資金）不因 M6＝良好降級，良好型重資產依規則書 G3／procedure/01 在 G3 排除（設計決策 D18）。問卷通過不提高等級（規則書 第 0 節第 9 點）。"
 }

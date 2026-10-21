@@ -1,10 +1,104 @@
 # 交接紀錄（handoff.md）
 
-> 最後更新：2026-10-17 深夜（M4 部分處理、資料包補強、換機與封存程序、建立 GitHub 公開 repo `claude-berkshire`）。新對話先讀本檔 §0，再依需要讀 `plan.md`（整體規劃）、`plan_dashboard.md`（M6 計畫）、`trader/CONTRACTS*.md`（各里程碑介面）、`換機匯出與封存程序.md`。
+> 最後更新：2026-10-21（本次 commit：round3（A3）修復全部完成，全套 3195 passed／3 個已知失敗；r3 未跑，名單待使用者決定）。新對話先讀本檔 §0，再依需要讀本檔末「2026-10-21 第三輪（A3）修復總覽」、`plan.md`（整體規劃）、`plan_dashboard.md`（M6 計畫）、`trader/CONTRACTS*.md`（各里程碑介面）、`換機匯出與封存程序.md`。
+> **維護規則（使用者 2026-10-18 決定）**：§0 是唯一的「現況」，每次 session 結束時**整段覆寫** §0；舊現況移到「§0-歷史」或下方各日期段，不在 §0 追加流水帳。
 
-## 0. 新 session 從這裡開始（2026-10-16 交接）
+## 0. 新 session 從這裡開始：現況（2026-10-21 本次 commit）
 
-**最新現況（2026-10-17 深夜，優先於下方較舊的敘述）**
+**一句話**：第二輪修復已通過 P55 總驗（2026-10-20 04:25）；第三輪全專案審查（round3，A3）的 CONFIRMED 項目**已全部修完並併入本次 commit**，乾淨匯出全套 3195 passed／3 failed（皆為已知）／12 skipped。下一步是 **r3**（15 檔）：名單與 run-id **待使用者決定**，`exclusions.csv`、`universe_override.txt` **待使用者回答**。r3 在 B 機（Hark）跑完、QA 通過後匯出，搬回使用者電腦（A 機）**直接當初始資料**；之後的排程分析一律在 A 機用 `claude_code`。r2 仍只當樣本。
+
+**禁止（新 session 一定要守，仍有效）**
+- **不要照舊指令重跑、不要覆蓋 r2**：本檔「§0-歷史」與各日期段裡的重跑指令都已過時；不得對現行 `state/` 跑 `trader analyze`／`bootstrap`／`daily`／`run-approved`。r3 的名單、run-id 與指令等使用者決定後才寫進本節。
+- **不要把 r2（或 r1）換回 A 機**。r2 樣本包是專案根目錄的 `berkshire_state_B_20261018_r2.tar.gz`（＋`.sha256`），r3 不得覆蓋或刪除它；r1 舊包（`berkshire_state_B_20261018.tar.gz.SUPERSEDED`＋`berkshire_state_B.sha256.SUPERSEDED`）同樣不得使用。
+- **r2 一律只當樣本**：不匯出成正式、不換到 A 機、不寫進 X5、不當結論引用（ALL、HIG、GL 的 REJECT 是已知誤判）。r3 完成前 A 機維持現狀、不換機；正式初始資料只有 r3（使用者 12:14 ASK-2＝A）。
+
+**P55（第二輪修復總驗，2026-10-20 04:25 通過）**
+- trader/tests 2803 passed／2 failed／1 skipped（2 個失敗是沙箱子行程限制，待 A 機確認）；screen／deep 腳本測試通過。
+
+**round3（第三輪審查與修復，已完成）**
+- 審查 → 復查（每條 CONFIRMED／REJECTED／OVERENGINEERED／DESIGN／DUP）→ 依修復組修完、另一代理查核。修復政策沿用 2026-10-18：CONFIRMED 全修、DUP 隨 canonical 修、REJECTED／OVERENGINEERED 不修、不過度工程化；DESIGN 題由使用者決定（或經授權由調度者決定）。
+- 每條修復（問題→修法→測試檔）、設計決策 D86–D99、刻意不修與後續觀察：見本檔末「2026-10-21 第三輪（A3）修復總覽」。
+- 測試基準（本次 commit 的乾淨匯出）：`cd trader && python3 -m pytest -q` → 3195 passed／3 failed／12 skipped。失敗是已知的：`test_fix_P23`（平行偶發，單跑會過）、`test_fix_P35::test_clean_hark_estimates_tool`（需 B 機專用工具，本 repo 不含）、`test_fix_RM1_5`（需凍結的 state 檔）。
+
+**r3 前置（跑 r3 前要完成）**
+1. ~~round3 的 CONFIRMED 全部修完、查核、全套通過~~：已完成（本次 commit）。
+2. `cik_predecessors.json`、`share_class_ratios.csv` 由 Hark 對照 S&P 500／SEC 補齊（使用者 2026-10-20 07:53）；`exclusions.csv`、`universe_override.txt` **待使用者回答**。
+3. inputs 沒有 `features.csv`：r3 抓資料要加 `--force` 重抓（A3-M1C）。
+4. 名單與 run-id **待使用者決定**。預定沿用 r2 的 15 檔（HIG PHM BBY WTW ULTA SPG HPQ GL FDX ALL UHS DHI LOW CF HON）；定案後寫進本節，並同步改《換機匯出與封存程序.md》§1 第 4 步（現列的是 A 機舊樣本的 15 檔，A3-M8B2-13）。
+
+**A 機同步**
+- 換機前兩台程式必須一致（《換機匯出與封存程序.md》§0）：A 機要套齊第二輪與本次 commit 的全部修復。
+- claude_code 沙箱 hooks 帶走 `.env` 金鑰的風險（M5-D8-01／02）**A 機實跑前必須已修**（11:03 決策：disableAllHooks、清 `.claude/`、子程序去除秘密環境變數）。
+- effort：A 機 `medium`、B 機 `max` 是明確例外（D51），不要互相對齊；以決策的 `provenance` 分辨。
+
+**r2 是什麼（只當樣本）**
+- 2026-10-18 六項修正後，15 檔（同上）自 DOSSIER 全部重跑，run 仍為 `analyze-2026-10-15`、asof 2026-10-15，決策寫入時間 08:43–09:16（台北）；後端 `hark_queue`（llm_calls 70 筆）、價格來源 Yahoo。登錄表：REJECT 13、TOO_HARD 1（HPQ）、MISSING_DATA 1（HON）。零 BUY／WATCH，無任何模擬或真實交易。
+- 已知錯誤：QA 判 6 檔停止點有誤——ULTA、LOW、UHS 應為 G1 TOO_HARD；ALL、HIG、GL 應為步 0 MISSING_DATA（登錄表的 REJECT 不得生效）。框架 10 年表的錯誤已由第二輪審查 M4 修正。
+- 舊資料一律是樣本：A 機的 2026-10-15 第一批（含 OTIS WATCH）與 `test_runs/`（換機時照程序 3.3 封存）、Hark r1、Hark r2。
+
+**r3 之後的流程（使用者 12:14 ASK-2＝A）**
+1. 在 B 機跑 r3（價格隔離照 09:42 決策）→ QA。
+2. 依 B 機的匯出程序匯出（檢查不過就中止；每筆決策、訊號卡、登錄表標 `origin=hark_b`，`provenance` 記 origin／backend／effort／價格來源，D51）；匯出副本中 B 機產生的 BUY／ADD 降為 WATCH、保留原訊號，A 機以 `claude_code` 重跑後才可能出現可下單的 BUY（D89）。A 機照《換機匯出與封存程序.md》整包替換，**直接當初始資料**；A 機舊的 2026-10-15 樣本照程序 3.3 封存（D53）。
+3. `origin=hark_b` 的 REJECT／TOO_HARD **不進 X5** 的 12 個月排除（`trader/trader/pipelines/screen.py` 的 `build_exclusions` 已實作，F01R／F01R2）；`needs_full` 對再入選者在 A 機重新完整分析。
+4. 之後排程分析一律在 A 機用 `claude_code`；任何 BUY 候選下單前在 A 機複核。
+
+**使用者決策（2026-10-18，仍有效）**
+- 09:42：回購前半只給粗分級（回購／業主盈餘級距、淨股數變化級距），精確金額與股數到 PRICE 可見階段才給；價格盲工作期間含價格檔不得留在模型可讀位置。
+- 09:48：B 機專用的隔離手段不得進 trader/、routing/、skills，上傳／產 patch 時排除。
+- 10:38：fetch_edgar.py／build_dossier.py／dossier_prep 標籤清單一次改完並比對初篩前 15 名與 P/E 中位；hark_queue 匯入改可選。
+- 11:03：claude_code 沙箱 hooks 金鑰風險，A 機實跑前必修（見上）。
+- 12:14：ASK-1＝B（auto_buy_cap = min(P2′, k×IV_base)，k：A 0.95／B 0.85，參數 `valuation.cap_discount_k`）；ASK-2＝A（見上）；修復政策（見上）。
+
+**交接待辦**
+1. r3 名單與 run-id：待使用者決定（見 r3 前置 4）。
+2. `exclusions.csv`、`universe_override.txt`：待使用者回答。
+3. A3-M8B2-13（換機程序 §1 第 4 步的名單）：r3 名單定案後改。
+4. A 機：套齊修復、確認 M5-D8-01／02 已修；排程仍未安裝（使用者 10-17 指示先不裝）；換機要等 r3。
+
+## 0-歷史（2026-10-21 晨，round3 修復進行中時的現況；已由上方 §0 取代，只供追溯，不得照做）
+
+當時 round3 已審完與復查、修復進行中（主線全套 3029 passed／3 failed／11 skipped）。其中仍有效的內容（禁止事項、P55、r3 前置、A 機同步、r2 說明、r3 之後的流程、2026-10-18 使用者決策）已整理進上方 §0；修復結果見本檔末「2026-10-21 第三輪（A3）修復總覽」。
+
+## 0-歷史（2026-10-18 中午的現況，2026-10-21 由新 §0 取代；只供追溯，不得照做）
+
+**一句話**：Hark（B 機）的 **r2 已完成，但只當樣本**；全專案對抗式審查已完成，**修復正在進行**；修完後在 Hark 跑 **r3**，r3 的結果搬回使用者電腦（A 機）**直接當初始資料**；之後的排程分析一律在 A 機用 `claude_code`。
+
+**禁止（新 session 一定要守）**
+- **不要照舊指令重跑、不要覆蓋 r2**：不得照 `hark/FIXES_20261018.md` §8、本檔「§0-歷史」的「在另一台電腦用空的 state 重跑」或任何舊段落的指令重跑；不得對現行 `state/` 跑 `hark/reset_ticker.py`、`hark/burst.sh`、`trader analyze`／`bootstrap`／`daily`／`run-approved`。r3 的指令與範圍在修復完成後另訂（調度者依 `hark/audit/` 的結果寫）。
+- **不要把 r2（或 Hark r1）換回 A 機**。r2 樣本包是專案根目錄的 `berkshire_state_B_20261018_r2.tar.gz`（＋`.sha256`），r3 不得覆蓋或刪除它（`hark/export.sh` 已拒絕覆蓋同名包）。根目錄的 r1 舊包（2026-10-18 已改名為 `berkshire_state_B_20261018.tar.gz.SUPERSEDED`＋`berkshire_state_B.sha256.SUPERSEDED`，內容未動）同樣不得使用。
+- **r2 一律只當樣本**：不經 `hark/export.sh` 匯出成正式、不換到 A 機、不寫進 X5、不當結論引用（ALL、HIG、GL 的 REJECT 是已知誤判）。r3 完成前 A 機維持現狀、不換機；正式初始資料只有 r3（使用者 12:14 ASK-2＝A）。
+
+**r2 是什麼（只當樣本）**
+- 2026-10-18 依 `hark/FIXES_20261018.md` 六項修正後，15 檔（HIG PHM BBY WTW ULTA SPG HPQ GL FDX ALL UHS DHI LOW CF HON）自 DOSSIER 全部重跑，run 仍為 `analyze-2026-10-15`、asof 2026-10-15，決策寫入時間 08:43–09:16（台北）；後端 `hark_queue`（llm_calls 70 筆）、價格來源 Yahoo。登錄表：REJECT 13、TOO_HARD 1（HPQ）、MISSING_DATA 1（HON）。零 BUY／WATCH，無任何模擬或真實交易。報告：`state/EXPORT_REPORT.md`（r2）。
+- 已知錯誤：QA 判 6 檔停止點有誤——ULTA、LOW、UHS 應為 G1 TOO_HARD；ALL、HIG、GL 應為步 0 MISSING_DATA（登錄表的 REJECT 是已知錯誤，不得生效）。另有框架 10 年表錯誤（利息列為付現利息、一年內到期債漏算、會計年度標籤差一年、保險浮存金成分未整理、回購金額＋流通股變化可推均價、股權獎酬單位＋金額可推授予價），由審查 M4 修正。
+- 舊資料一律是樣本：A 機的 2026-10-15 第一批（含 OTIS WATCH）與 `test_runs/`（換機時照程序 3.3 封存）、Hark r1、Hark r2。
+
+**全專案審查與修復（進行中）**
+- 計畫與規則：`hark/audit/AUDIT_PLAN.md`；設計決策：`hark/audit/design_decisions.json`、`DESIGN_DECISIONS.md`；復查結果：`hark/audit/verified/M*.json`；修復分工與狀態：`hark/audit/fixes/TRACKER.md`、各任務紀錄 `hark/audit/fixes/*.md`。
+- 修復政策（12:14）：CONFIRMED（P0／P1／P2）全修；OVERENGINEERED、REJECTED 不修；DUPLICATE 隨 canonical 修；每項先確認根本原因，修完由另一子代理查核；不要過度工程化。
+- 測試基準：r2 時 `cd trader && python3 -m pytest -q` 821 passed／1 skipped；修復期間以各修復任務回報的全套數字為準。
+
+**r3 之後的流程（使用者 12:14 ASK-2＝A）**
+1. 修復完成、查核通過 → 在 Hark 跑 r3（價格隔離照 09:42 決策：價格檔加密封存、提示禁網路／記憶工具、事後 grep 稽核）。
+2. 用 `hark/export.sh` 匯出（檢查不過就中止；白名單＋`MANIFEST.json`；每筆決策／訊號卡／登錄表標 `origin=hark_b`；每筆決策的 `provenance` 欄記 origin／backend／effort／價格來源，D51；輸出在 repo 外 `/workspace/hark-sbx/export/`），A 機照《換機匯出與封存程序.md》整包替換，**直接當初始資料**；A 機舊的 2026-10-15 樣本照程序 3.3 封存（保留原目錄＋DB 改名＋README＋tar.gz/sha256，D53）。
+3. `origin=hark_b` 的 REJECT／TOO_HARD **不進 X5** 的 12 個月排除（下一季初篩仍可再選入）。框架已完成（F01R／F01R2，`trader/trader/pipelines/screen.py`）：`build_exclusions` 讀 `data.origin`，hark_b 的 REJECT／TOO_HARD 不進 X5；`needs_full` 對再入選者在 A 機重新完整分析。
+4. 之後排程分析一律在 A 機用 `claude_code`；任何 BUY 候選下單前在 A 機複核。
+5. effort：A 機 `medium`、Hark `max` 是明確例外（D51，見 `HARK_執行說明.md` §1），不要互相對齊；以決策的 `provenance` 分辨。
+
+**使用者決策（2026-10-18，細節見 AUDIT_PLAN）**
+- 09:42：回購前半只給粗分級（回購／業主盈餘級距、淨股數變化級距），精確金額與股數到 PRICE 可見階段才給；價格盲工作期間把含價格檔加密封存移出、金鑰不落地，結束再還原（工具建在 hark/，寫明金鑰遺失時從快取重建）。
+- 09:48：留言板、加密封存等 Hark 專用隔離手段只放 `hark/`，不得進 trader/、routing/、skills，上傳／產 patch 時排除。
+- 10:38：fetch_edgar.py／build_dossier.py／dossier_prep 標籤清單由同一修復代理一次改完並比對初篩前 15 名與 P/E 中位；hark_queue 匯入改可選。
+- 11:03：claude_code 讀沙箱專案設定＋同沙箱重試可被注入 hooks 帶走 `.env` 金鑰（M5-D8-01／02）；修法 disableAllHooks、清 `.claude/`、子程序去除秘密環境變數。**A 機實跑前必修**。
+- 12:14：ASK-1＝B（auto_buy_cap = min(P2′, k×IV_base)，k：A 0.95／B 0.85，參數 cap_discount_k）；ASK-2＝A（見上）；修復政策（見上）。
+
+**A 機仍未做**：排程未安裝（使用者 10-17 指示先不裝）；換機要等 r3。
+
+## 0-歷史（2026-10-16／10-17 交接，已過時；只供追溯，不得照做）
+
+> 以下是 10-17 以前的現況，其中「下一步：在另一台電腦用空 state 重跑」已由 Hark r1、r2 執行過，現行計畫見上方 §0。
+
+**當時現況（2026-10-17 深夜，已過時）**
 - 測試：`cd trader && python3 -m pytest -q` 744 個全過；初篩自測通過。
 - **下一步由使用者執行**：在另一台電腦用空的 state 重跑全部分析（`bootstrap --asof 2026-10-15`，或 `--tickers` 指定同一批 15 檔），再依 `換機匯出與封存程序.md` 把整個 state 換回本機。
 - **下方 §0 與 §4d 描述的 2026-10-15 第一批 15 檔結果，以及 `test_runs/`，在替換後會封存為樣本**（`~/berkshire-archive/SAMPLE_analyze-2026-10-15_不得採用/`，唯讀、不可變、不刪）。替換完成後，現行結果一律以 `state/trader.db` 為準，不得引用這批舊結論。
@@ -111,7 +205,7 @@ plan.md、handoff.md 另外複製。
 | M6 儀表板與 opus 同意閘門 | ✅ 完成（2026-10-16）：6a 同意閘門、6b API、6c 網頁、6d Swift 小儀表板＋launchd、6e 匯出、validate-report | 計畫見 `plan_dashboard.md`；6a 同意閘門 → 6b API → 6c 網頁設計稿 → 6d Swift 小儀表板 → 6e 匯出 |
 | M7 上線 | 程式完成（2026-10-16）；待初始 bootstrap 完成後啟動排程 | `trader bootstrap`、`trader scheduler`，契約見 trader/CONTRACTS_M7.md |
 
-測試：`cd trader && python3 -m pytest -q` → **643 passed**（含 skill 原有兩支自測）。
+測試：`cd trader && python3 -m pytest -q` → **643 passed**（含 skill 原有兩支自測）。（2026-10-16 當時數字；現況見 §0）
 
 已實際驗證：
 - `trader init`、`trader doctor`：真打一次 `claude -p`（haiku），3.3 秒回應正確；
@@ -331,7 +425,8 @@ plan.md、handoff.md 另外複製。
 - **H1 scheduler**：`tick()`／`run_forever` 改 `check_ready(strict=False)`，只在登錄表為空時擋；`plan()` 在有待同意／未完成工作時只暫緩 `watch` 與季度初選（`screen`），`daily`、`freeze`、`report` 照跑，處理完後自動補上。`check_ready()` 預設 strict，只有 `scheduler install` 用（cli.py）。注意：`run`／`once` 也改成非 strict——cron 模式每 10 分鐘跑一次 `once`、launchd 重啟 `run` 時，若仍嚴格擋待同意，H1 會經由重啟再現。測試：`test_scheduler.py` 新增 `test_pending_approval_does_not_halt_daily_but_defers_watch_and_screen`，並調整 `test_refuses_before_bootstrap`。
 - **H2 公司行動**：`ledger/corp_actions.py` 新增 `record_job_failure`、`unresolved_failed_events`（異常 kind=`corp_action_job_failed`，pause_trading=1，detail 存完整事件）。`pipelines/daily.py`：CORP_ACTION 工作非 done／skipped（失敗、預算耗盡、未完成）→ 寫異常暫停該檔；每次 daily 先把未入帳的失敗事件重派（不受 (prev,date] 窗口限制），入帳後自動結案解除暫停；同日重跑換新 job_id（`...r2`）；`run_daily` 新增可選 `sleep` 參數供測試。daily 本身仍標 done（以異常 + notes 呈現）。測試：`test_daily_pipeline.py::test_failed_corp_action_job_pauses_ticker_and_is_redetected_next_day`。
 - **退避**：`llm/base.py` 額度類訊息（usage limit／quota／rate limit／credit／overloaded）退避改 60、120、240 秒（共 7 分鐘），其餘仍 2、4、8。不再更長，因訂閱額度重置要數小時，真正的保險是上面的事件重派。測試：`test_llm.py::test_quota_errors_back_off_longer`。
-- 已知限制：重派後若該事件反覆失敗，異常會一直開著該檔暫停（含賣出）直到成功或人工處理；M3（失敗工作不重跑）未動。
+- 已知限制：重派後若該事件反覆失敗，異常一直開著、每次 daily 重派直到成功或人工處理；M3（失敗工作不重跑）未動。
+  **現行（A3-V3-3-02，10-21 更新）**：未解除前該檔暫停（買進、TRIM 拒單；SELL_ALL 建委託但撮合擋）。`ledger adjust --unpause T` 只把這筆異常的暫停關掉、不結案，事件照樣重派；之後同事件再失敗**不會重新暫停**，只在異常 detail 記 attempts／last_error／last_job_id。已人工入帳（例：人工拆股）：同一指令 `--qty/--avg-cost … --unpause T` 會一併結案；或 `--resolve ID`。若分兩次指令（先改股數、再 unpause）而沒結案，重派的 apply 看到失敗後有 manual_adjust 會回 conflict → 拒收轉人工（暫停、待人工公司行動列），不會重複入帳。
 
 
 ## 2026-10-17 第三次審查 M1／M2／M3／M5／L2 修正
@@ -357,7 +452,7 @@ plan.md、handoff.md 另外複製。
   - `peers.py`：10-K 點名但不在 S&P 500 的競爭者也比對（名稱只去法律形式字、至少兩字、SIC 大類相同，最多 4 家）；連字號名稱處理（Sherwin‑Williams 不再誤配 WMB）；衝擊年樣本 <8 家時以 `SecClient.sic_companies`（SEC 公司搜尋，快取 30 天）補本公司與池內同業的 SIC 四碼公司，最多讀 30 家。資料包列出補充公司名，衝擊年含補樣本時附「判定說明」，FULL_A 須在誠實標示逐年說明本公司是否同受衝擊與剔除方向（使用者決定保留補樣本，照 SIC 前兩碼規則）。
   - 實測：WTW 補充資料只有定性「strong client retention」；ALL 有 policies in force 數字；FDX 補樣本後 2020–2021 判為衝擊年（主要是航空客運拉低），交分析在誠實標示說明。
 - **換機**：`換機匯出與封存程序.md`（匯出清單與 9 條檢查、`.backup` 打包、本機封存四層隔離、替換、還原）。注意 launchd 的 dashboard／widget 有 KeepAlive，替換前須 `desktop uninstall`。
-- **未做**：法說會逐字稿（SEC 沒有）、留存率數字；`cap_input_file` 仍存絕對路徑（使用者決定先不改，目前無程式讀取）。
+- **未做**：法說會逐字稿（SEC 沒有）、留存率數字；`cap_input_file` 仍存絕對路徑（使用者決定先不改，目前無程式讀取）。（已由 M8-R4-01 改存相對路徑 `cap_inputs/{T}.json`，`ledger/book.py` 讀取；見 §0）
 
 
 ## 2026-10-18 G8 持股比較檔
@@ -376,4 +471,314 @@ plan.md、handoff.md 另外複製。
   - **HOLD_REVIEW**：沙箱也放比較檔（本持股在 `self`），提示 Q3「明顯更好的用途」只能用這份數字比、差 <1pp 不算。
   - 規則文件：SKILL.md G8 行、procedure/06 §2、procedure/08 資料表已註明框架給數字與推論參數。
 - **PRICE 加碼補 G8 檢查**（同日，測試 772 個全過）：`review_jobs._g8_check_add` 用本次 run 的比較檔（排除本標的）與 FULL_B 同一判準（`g8_verdict`），明顯輸 → ADD 改 HOLD 並記理由；run 沒有比較檔只記錄不擋。PRICE 的新部位 BUY 本來就升級為完整分析（走 FULL_B 的 G8），不需另補。
-- **仍未做**：相關群上限（P-31／P-32）；沒用真模型跑過、帳上 0 檔持股。
+- **仍未做**：相關群上限（P-31／P-32）；（相關群上限已由 P-31／P-32 完成，見下段「2026-10-18 Hark 修正」第 6 項與 §0）沒用真模型跑過、帳上 0 檔持股。
+
+
+## 2026-10-18 Hark 修正（資料包多年＋重編、回購價隔離、schema null、相關群 P-31／P-32）
+測試 `cd trader && python3 -m pytest -q`：819 passed／1 skipped（基準 778＋41）；`berkshire-deep-merged/scripts/test_review_due.py` 通過。未呼叫模型、未跑 daily／run-approved、未 commit。只對 SEC 做唯讀實測（輸出在 /tmp，未寫 state）。完整說明：`hark/FIXES_20261018.md`。
+
+1. **保險／銀行多年 10-K**（`analysis/dossier_prep.py`：`multi_year_industry`、`_pick_history_10k`、`history_10k_text`、`insurance_section`、`history_section`；`jobs/deep.py` 前置）
+   - 問題：資料包只放最新 10-K，保險綜合率、準備金發展、浮存金只有 3 年 → ALL／HIG／GL 停步 0（P-58、procedure/08 §3 要 5 年，最好 10 年）。
+   - 作法：SIC 6300–6399（保險）、6020–6036（銀行）另抓歷年原始 10-K（申報日 < 最新 10-K < asof；回溯 12 年舊分頁），由新到舊每隔一份取一份、至多 4 份（連同最新涵蓋約 11 個會計年度），只留 Item 1、7、7A、8、15，同樣刪價格章節、逐行刪價格句、遮蔽回購股數；檔名 `10-K-HIST_*`、`_index.json` 標 `history: true`（同業比對與 fy_last_filed 不受影響）。保險另附 XBRL 補充表（已賺保費、損失、準備金…；近似綜合率只在兩項費用都有時算、近似浮存金四項主要成分都有才算）。DOSSIER 提示要求逐年整理產業補充序列並標出處，湊不滿 5 年照實列 missing。
+   - 推論：SIC 範圍（6411 經紀不算）、間隔 2 份、至多 4 份、各 Item 字數上限（ALL 實測 Item 7／8 各 23–38 萬字）。
+   - HON 的 drop_price_sections 修正保留，`test_history_10k_keeps_hon_style_statements` 守住。
+2. **首次公布版＋最新重編版**（`restatement_data`、`restatement_section`；`build_dossier_base`）
+   - companyfacts 同財年取首次申報（10 年表原口徑）與決策日前最新申報兩版，資料包加「首次公布版與最新重編版對照」段（最新版完整表＋差異清單），另存 `dossier/_restatements.json`；保險另比對已賺保費、損失、準備金。全部 filed < asof。推論：差 ≥0.5% 才列差異。ALL 實測列出 11 筆（例 FY2019 營收 −7.0%）。
+3. **價格隔離：平均回購價**（`mask_buyback_shares`、`buyback_leaks`、`_mask_buyback_tables`；`fetch_sec_texts`、`peers.py`、`DossierHandler.post`、`FullAHandler.prepare` 保險絲）
+   - 問題：資料包同時有回購金額與股數（2026-10-15 批 8 檔的 dossier 有這種句子：PHM、BBY、WTW、ULTA、SPG、ALL、LOW、CF）；實測 WTW 10-K 原文的回購表還留著「$321.10」（均價），10-Q 的「(c) Issuer Purchases」表整段未刪。
+   - 作法：談回購的句子中股數遮蔽為「［回購股數已遮蔽：見價格檔］」（金額保留）；HTML 轉文字後每格一行的回購表，以標籤行觸發表格模式遮蔽數字格；`_PRICE_SECTION_START` 接受「(c)」前綴；價格句新增「平均回購價／average repurchase price」；回購股數與金額另寫 `{T}_price.json` 的 `buyback_shares_by_fy`、`buyback_amount_by_fy`。遮蔽在刪價格句之前做（價格標籤是觸發）。
+   - 推論：以句子為單位寧可多遮（含「流通股降至 N 股」）；表格模式可能連帶遮掉現金流量表「Repurchase of shares」列的金額（10 年表與 MD&A 仍有金額）。
+4. **FULL_A 護城河三測**：核實後**無需修改**。schema 自初始 commit 4fc5f7c 起即三鍵（含 price_cut），提示渲染也是三鍵，writeback `_MOAT_KEYS` 三鍵，gate3 問卷 M1–M3 至少 2 強；QA 引用的是 HIG 原執行報告的錯誤陳述（HIG 審查員自己已判為錯誤陳述）。補三項一致性測試防回歸。真正的缺口是未評欄位不能填 null（第 5 項）。另記：moat_tests 用「強／中／弱」、問卷用「強／弱／不知道」，量表不同但不影響計數（未改）。
+5. **未評估 → null**：FULL_A `moat_tests` 允許 null、`red_flags`、`capital_allocation_net` 改「數字或 null」；FULL_B `target_weight`、`first_tranche_weight` 改「數字或 null」；訊號卡 `bias_count` 範例改 null 並在 `_說明` 寫明 0＝已評且為零；提示 FULL_A／FULL_B 明文禁止以 0 代替。下游（reject_basis、sizing.target_weight、write_stop_result）對 null 已安全，補測試。
+6. **相關群 P-31／P-32**（新 `portfolio/correlation.py`；`assets/external_drivers.json` 受控詞彙 27 個 id；`sizing.plan_buys／plan_tranches`、`FullBHandler.post`（`_corr_writeback`）、`writeback`、`holdings_view`、`daily`）
+   - FULL_B／HOLD_REVIEW 輸出 `external_drivers`（每列 driver＋失效條件原文）與 `external_drivers_change_reason`；判定寫入訊號卡與登錄表（`external_drivers`、`_basis`、`_determined_on`），與既有判定不同且未附新事實 → 維持既有判定；新的同群關係寫進兩檔論點檔增補與登錄表 `corr_links`（P-31「判定記入兩檔論點檔，之後只能因新事實改判」）。
+   - 分群：詞彙 `variable` 為鍵、連通分量。群上限 min(2×單檔等級上限, 10pp÷群最壞相對損失)；P-32 損失 Σw×d（金融 50%、非金融 30%）。>5%：FULL_B 的 BUY → WATCH（停在 G11），plan_buys／加碼批次拒單；未超過時縮量到買後 ≤ 群上限且損失 ≤5%，剩餘 <3% 不建倉。>10%：從最弱者（等級最低→G8 低）產生減碼建議，寫不暫停的異常 `corr_group_trim`、daily 摘要 `corr_groups`、run 目錄 `_portfolio/corr_groups.json`，不下單。舊卡無 external_drivers → 未知：不擋、記 warning、列入報表。
+   - 推論（規則書未寫清）：群最壞相對損失用 P-32 減損權重加權；混合等級取最小等級上限；方向不分；單筆買進不得把群推過 5%；缺 asset_class 視為金融。已寫入 procedure/06 §3 與 inferred_thresholds。
+- **未做（當時）**：r2 重跑當時未跑——**r2 已於 10-18 09:16（台北）完成**，只當樣本，見 §0；`hark/FIXES_20261018.md` §8 的指令已過時，不得再照做；真模型未驗 external_drivers 標註品質；月報（report/metrics）未加「相關群最大合計」欄（daily 摘要已有 `max_group_weight`）（已由 M8-D10-07 完成：`report/metrics.py` 總覽與 `report/validation.py` 月報已有最大相關群合計權重，見 §0）；銀行業 XBRL 補充表未做（只抓歷年 10-K）；`burst.sh` 內含 run-approved，未改。
+
+## 2026-10-18 人工操作注意（P46／X33）
+- **作廢錯誤決策後重跑**：`trader decisions void <decision_id…> --note 理由`（只標記作廢、取消它的未成交委託；daily、延後買進併回、閘門 3 狀態、近期完整分析判斷、分析頁與檢討報告都不再採用），再用**新的** `--run-id` 重跑 `trader analyze --asof <日期> --tickers <代號> --run-id <新 run-id>`；同一 run-id 重跑不支援，舊 run 殘留工作用 `jobs abandon`。作廢不還原已回寫進登錄表的價格線／等級，由重跑的新決策覆寫。細節見《換機匯出與封存程序.md》§4.1。
+- **人工暫停期間的系統賣單（現行，A3-M8C2-04）**：`ledger pause`（該檔或 `--all`）期間買進與 TRIM 減碼拒絕下單（列在當次 daily 輸出的 rejected，解除後**不會自動重下**，需要時用 `trader trade sell --ticker T --qty N --note …` 人工補下）；SELL_ALL 全清照建委託、撮合時擋，解除（`ledger adjust --unpause T`／`--unpause-all`）後次日自動撮合，**不要另補賣單**（會重複賣）。
+
+## 2026-10-21 第三輪（A3）修復總覽
+
+全部修復已併入本次 commit；乾淨匯出全套 3195 passed／3 failed（已知：P23、P35、RM1_5，見 §0）／12 skipped。未呼叫模型、未下單、未動 state。格式：**編號**：問題 → 修法（測試檔）。測試檔都在 `trader/tests/`，skill 自測另註明。修復組檔名對照：`test_fix_F3_<組>.py`。另有 B 機專用工具一組修復（F3-HK），不在本 repo，此處不列。
+
+### 初篩／SEC
+
+- **A3-M1A-01**：非太難型核心股不足 top 時，拿超額的太難型補位 → 短名單只取迴圈選中者，可少於 top（`berkshire-screen-merged/scripts/test_screen.py`）
+- **A3-M1A-04**：`test_screen.py` 只跑 17／19 個測試 → 改為跑檔內全部 `test_*`（同上）
+- **A3-M1A-05**：無 SIC 的列 sector 變成 `<NA>` 字串，被當成一個產業參與 T5 → 標「未分類」、不當產業（同上）
+- **A3-M1C-01**：會計年度變更過渡年警示只算不寫 → 併入 features 的 data_notes（同上）
+- **A3-M1C-09**：skill 單獨使用時月線最後一根含決策日之後的價格 → 丟掉與決策日同月的 K 線（同上）
+- **A3-M1E-05**：skill `fetch_edgar` 快取永不過期、`fetch_prices` 失敗不等待 → 給 asof 時快取早於 asof 就重抓；失敗也守 0.5 秒間隔（同上）
+- **A3-M1E-06**：`screen.py` 不檢查 prices.csv 的 price_date 晚於決策日 → 中止（同上）
+- **A3-M1B-05、A3-M1C-10**：初篩文件跨模塊引用失效、交接檔 special_watch 未入 SKILL 欄位說明 → 文件修正並鎖住（`test_fix_F3_VAL.py`）
+- **A3-M1A-03**：screen_context 只看最近一次初篩，查不到就判未篩 → 往較早的初篩找，note 寫來源日（`test_fix_F3_HS.py`）
+- **A3-M1B-01**：誠信淘汰（integrity_reject）12 個月後失效、可再入短名單 → 現任決策者在位期間不重評、不設 12 個月年限（D27），summary 列出（同上）
+- **A3-M1B-02**：screen_overrides.csv 依檔案順序去重、空白日期無提示 → 依日期判斷生效／過期、與順序無關，空白日期回報（同上）
+- **A3-M1C-03**：summary 只列 X5 → 新增 `x1_registry`（登錄表推得的 X1 與到期日）（同上）
+- **A3-M1C-06**：待人工項目只寫 summary.json，排程無提醒 → 開 `screen_review` 異常，同 asof 不重複，dry-run 不開（同上）
+- **A3-M1C-11**：decisions 的 screen_context 少追溯欄 → 補 fy_last_filed、max_filed_used、mcap_shares_source（同上）
+- **A3-M1E-02**：dry-run 初篩記成已完成、bootstrap 出錯仍寫 last_screen → dry-run 與錯誤都不算本季已篩（同上）
+- **A3-M1E-03**：`--force` bootstrap 中斷後 `analyze --asof D` 靜默沿用舊 run → bootstrap 回填 analyze_run_id、analyze 沿用並警示「不會重做」（同上）
+- **A3-M1E-04**：股票池釘選連 override 測試名單一起釘住 → override 名單不釘選並警示；override 代號不在 to_analyze 也警示（同上）
+- **A3-M1C-04**（復查判 OVERENGINEERED，只加註記）：P/E 中位 method 註明多類股未去重、影響約 0.1%（同上）
+- **A3-M1C-02**：前視錯誤被吞成單檔「抓取失敗」 → 整批中止、不寫輸出；其他錯誤記型別與訊息（`test_fix_F3_SEC.py`）
+- **A3-M1E-01**：SEC 失敗／封鎖時全池靜默用舊快取並照常凍結 P/E 中位 → 舊快取比例 >10% 或封鎖中：不凍結 P/E、初篩失敗讓排程重試；比例小照常；沒有舊快取時 SEC 封鎖照舊往上拋（同上）
+- **A3-M4C-01**：為找 EX-13 下載並永久快取整份 SGML → 先看索引，沒有 EX-13 就不下載（`test_fix_F3_C.py`）
+- **A3-M4C-02**：同業 SIC 每個新決策日重抓約 500 家 submissions、舊分頁也重抓 → 長新鮮期，舊分頁不重抓（同上）
+- **A3-M4E-02**：`xbrl_shares` 直接 http.get，SEC 封鎖不起算冷卻 → 經 `SecClient._request`（同上）
+
+### 深度分析與路由驗證
+
+資料包組裝與同業（F3-C）
+- **A3-M4A-05**：封面股數讀取失敗仍寫資料狀態「正常」 → 進資料狀態（`test_fix_F3_C.py`）
+- **A3-M4A-06**：15 個月內無 DEF 14A 時，公司行動 DEF 14C 擠掉年度委託書 → 先退用 3 年內最新的 DEF 14A（同上）
+- **A3-M4A-07**：股票股利兩來源口徑不一 → Alpaca stock_dividend 與 Yahoo 同口徑進拆股字串；Yahoo 1–1.1 間非簡單比例標待人工、不乘股數（同上）
+- **A3-M4A-08**：任一份非必要申報抓取失敗就讓 DOSSIER 前置失敗 → 單份只記缺，最新 10-K 失敗照拋（同上）
+- **A3-M4B-01**：20 年中位失敗連 30 年期一起丟、FRED 警示不進資料包 → 分開處理，警示進利率段（同上）
+- **A3-M4C-03**：Part III 10-K/A 晚於原 10-K 時拆股基準被推後 → 以原 10-K 申報日（同上）
+- **A3-M4C-04**：Form 4 恰好 MAX_FILINGS 份也標截斷 → 多一份才算（同上）
+- **A3-M4A-01**：GICS「很窄」判定扣掉點名者，大組看似 ≤5 家 → 組大小含點名者（同上）
+- **A3-M4A-02**：沒有 10-K 競爭段也寫「點名公司不在 SEC 名單」 → 分辨兩種情況；無 GICS 時寫 SIC 四碼（同上）
+- **A3-M4A-03**：最新財年營收缺時退用舊年 → 記缺（同上）
+- **A3-M4A-04**：同業 ROE 口徑與 10 年表不同 → 期初或期末權益 ≤0 不計（同上）
+- **A3-M4B-02**：override／舊快取名單標成「決策日抓取的 S&P 500」 → 照實標來源（同上）
+- **A3-M4E-01**：同業與內部人吞掉 SecBlocked、資料狀態寫正常 → 同業縮水留痕；內部人往上拋，呼叫端標缺（同上）
+
+深度鏈（F3-DP）
+- **A3-M1D-01**：X5「近期已淘汰」經 screen_context 進價格盲 FULL_A（錨定前次結論） → 去掉（`test_fix_F3_DP.py`）
+- **A3-M2B-03**（D92）：RED_LIGHT 重跑無次數上限、沒有上次致命路徑 → 只重跑一次並帶上次 fatal_paths；連續第二次紅燈回一般節奏、維持 WATCH（同上）
+- **A3-M2C-02**：訊號卡紅燈欄未落地（bias ≥3 的 BUY 未轉紅燈） → 落地（同上）
+- **A3-M3B-01、A3-M3D-03**：持股 FULL_A 在 G0–G6 違規停止不退回、無估值仍推進完整複查日 → 退回一次；仍停止不推進 last_full_review_date，next_full_review_due＝決策日＋91 天（步 0 停止不退回）（同上）
+- **A3-M3C-03**：HOLD_REVIEW schema 鍵 `_grade_after`、程式讀 `grade_after`，H2 降級靜默丟失 → 兩者都讀，schema 註明選填（`test_fix_F3_DP.py`、`test_fix_F3_GLUE.py`）
+- **A3-M3D-01**（1）：論點理由經 trigger_text 帶出估值字句 → 遮蔽（`test_fix_F3_DP.py`）；（2）（3）TRIAGE 提示新聞帶 URL、triage_result 原樣進 THESIS 沙箱 → 去 URL、只放價格盲版（`test_fix_F3_GLUE.py`）
+- **A3-M3D-02**：HOLD_REVIEW Q3c 頂級複利型只信模型 → 框架核 P-08 品質優才放行（`test_fix_F3_DP.py`）
+- **A3-M2C-06**（deep 層）：deep 層沒把 distress_pass 傳給機械版業主盈餘 → 傳入（同上）
+- D93 的 g_notes 進決策日誌；內部人解析失敗標缺；G8 `_pick` 帶 price_to_conservative（同上，同組待辦）
+
+DOSSIER 續跑（F3-B）
+- **A3-M4E-03、A3-M5C-04**：DOSSIER 續跑不要求 `_meta.json`，中斷後跳過 D20 金融前置 → 沒有 PREP_DONE 的舊資料夾另須 `_meta.json`（`test_fix_F3_B.py`）
+- **A3-M5E-01**：post 寫回模型版資料包後失敗再重跑，前置以模型版為底 → 前置另存底稿 `dossier/{T}.base.md`，重跑從底稿開始（同上）
+
+skill 腳本與 assets（F3-SKb）
+- **A3-M2A-01**：上次分析日為非交易日時，之後第一個交易日的漲跌不計入單日 ±4% → 從分析日前最後收盤起算（`test_fix_F3_SKb.py`、`berkshire-deep-merged/scripts/test_review_due.py`）
+- **A3-M2A-02**（D97）：incr_roic_gt_rd＝false 時成長仍加價值 → 三值：false 硬上限 ≤ IV0×等級係數並記 note；null（資料不足）不改上限（同上）
+- **A3-M2A-03**：A 級 g_impl 門檻「≤ g5 一半」在 g5 ≤0 時反而較寬 → 只在 g5 >0 時套用（同上）
+- **A3-M2A-06、A3-M2B-07**：GATE3_FAIL／RED_LIGHT 觀察檔因長債變動或跌破上限仍排 PRICE（不能升 BUY，白跑）；登錄表契約缺 last_reason_code → 不排 PRICE、等完整分析；契約補齊（同上）
+- **A3-M2A-07**：問卷說每題可答「不知道」但 C1、C5、M5、M6 沒有此選項 → 說明改為照實（同上）
+- **A3-M2A-08**：gate3_check 以字串比較含時區時間、格式錯直接例外 → 解析成時間比較；非 dict 答案回格式錯（同上）
+- **A3-M2A-11、A3-M2A-12、A3-M2C-09**：registry schema 漏框架鍵、報告範本漏正常化主口徑、訊號卡缺持有側欄 → 補為選填（同上）
+- **A3-M2A-13**：價格檔 buyback_amount_by_fy 保留負號 → 取絕對值（同上）
+- **A3-M2B-01**（D90）：結論測試在本模型下必然翻轉（退化） → 刪除翻轉腿，auto_buy_cap＝0.95×原始上限，文件同步（同上）
+- **A3-M2B-02**（D91）：文件寫的 r_stress／r_sens 與程式不符 → 文件改成實際式（程式不改）（同上）
+- **A3-M2C-07**：build_dossier 單跑沒有利率段、指引錯 → 說明利率段由框架提供（同上）
+- **A3-M2D-01**：閘門 3 證據日期未定義 → 定義為申報日，不得引用決策日後才申報的文件（同上、`test_fix_F3_GLUE.py`）
+- **A3-M2E-02**：review_due 一檔例外整批沒有 due.json → 逐檔隔離、標 check_error；框架對 check_error 開異常（同一 asof 一次）（`test_fix_F3_SKb.py`、`test_fix_F3_GLUE.py`）
+
+機械版業主盈餘比對與閘門 2（F3-QC）
+- **A3-M2A-09**：capex 用原始正負號，負數申報時 K 恆為 1.0 → 一律 abs（`test_fix_F3_QC.py`）
+- **A3-M2B-04**：拆股基準未追溯時機械版 g 必與模型差 >1pp → 跨跳動年的 g 回 None 並註明；deep_quant 用本地常數，單獨複製 skill 也能跑（同上）
+- **A3-M2C-06**：步 4A 困境三問全過時機械版缺 5 年窗口中位 → 選填 `distress_pass`＝true 時採用（同上）
+- **A3-M2B-05**（D93）：照 procedure/05 改算 g 的模型被退回 → 填 `g_adjustment_reason` 時 g 差異只記註、不退回，E、K 照核（同上）
+- **A3-M3C-06**：剔除年填 'FY2020' 被靜默丟掉造成假差異 → 接受整數與 FY 字串，schema 範例改整數（同上）
+- **A3-M2B-09**：荒謬級線可低於自動買進上限／IV_base → 閘門 2 加不變式檢查（同上）
+- **A3-M3A-01、A3-M2F-06**：HOLD_REVIEW 提示要求帶括號答案違反 schema 列舉；Q3「差 <1pp」比 P-53 寬 → 提示與契約修正（`test_prompt_contract.py`）
+
+輸出驗證與路由（F3-VAL、F3-VALb）
+- **A3-M2B-08**：「最高 B／C」上限型降級只降一級 → 選填 `max_grade`，框架逐 driver 降級後取較嚴（`test_fix_F3_VAL.py`、`test_fix_F3_VALb.py`）
+- **A3-M2C-01**：FULL_B 看價後必降（資本配置淨分為負、P-08 最終品質）框架不核 → validate 壓回並記 grade_notes；`FullBHandler.post` 帶訊號卡再算一次（同上）
+- **A3-M3A-02、A3-M3C-07**：signal×reason_code 只檢 BUY → BUY／WATCH 一律 PASS_ALL，停止碼只配 NO_ACTION（`test_fix_F3_VAL.py`）
+- **A3-M3A-04**：driver_id 空字串過驗證、D18 去重失效 → 必填（同上）
+- **A3-M3A-05**：validate 無人使用的字串規則 → 加註保留相容（同上）
+- **A3-M3B-04、A3-M3C-04**：holding_stop 藏在說明鍵不驗型別 → 驗 dict 與列舉（同上）
+- **A3-M3C-05、A3-M3B-08**：失效條件與 THESIS next_due 可 ≤ 決策日（永不觸發） → 須晚於決策日（同上）
+- **A3-M3D-04**（D99）：FULL_B 等級高於 FULL_A 上限 → 不報錯、框架壓回上限並記註，不退回（同上、`test_fix_P26.py`）
+- **A3-M3B-03**：框架會覆寫的欄（price、decision_id）列必填 → 改選填（同上）
+- **A3-M3C-08**：routing 文件漂移（model_routing inputs、PRICE batch、README 升級條件） → 與處理器對齊（同上）
+
+跨檔收尾（F3-GLUE）
+- D97：incr_roic_gt_rd 三值照傳到 cap_calc，validate 接受 null；D90：PRICE 提示、routing、閘門 2 與訊號卡不再讀 conclusion_test；D90／D91 估值文件與 inferred_thresholds 列與 cap_calc 一致；持股停止重排 91 天寫入文件；異常種類中文名（`test_fix_F3_GLUE.py`）
+
+觸發檢查（F3-RE、F3-B、F3-SEC、F3-C）
+- **A3-M3C-01**：TRIAGE 遇 8-K 原文缺、模型答否即視為已讀 → 升 THESIS（`test_fix_F3_RE.py`）
+- **A3-M1A-07**：PRICE 註解寫錯金融 P/E 口徑 → 只改註解（同上）
+- **A3-M5B-05**：TRIAGE 判否日誌只在 review 收尾寫，retry／續跑漏寫 → 工作完成處寫（`test_fix_F3_B.py`）
+- **A3-M5C-03**：TRIAGE 重跑殘留舊 8-K → 前置先清（同上）
+- **A3-M5C-05**：API 後端 TRIAGE 超出上下文無 on_fail → ContextOverflow 升 THESIS；暫時性失敗維持 failed 留給 retry（同上）
+- **A3-M5C-07**：滿一年／兩年用 365／730 天，閏年早一天 → 日曆比較（同上）
+- **A3-M2E-01**：登錄表日期欄格式不一（帶時間、YYYYMMDD）造成崩潰或略過申報 → 正規化（`test_fix_F3_SEC.py`）
+- **A3-M2E-03**：申報抓取恢復時 last_review_date 整體回退、價格與失效條件重觸發 → 只放寬申報窗口（filings_since）（同上）
+- **A3-M7D-04**：補跑舊 asof 時，asof 後的拆合股已套進歷史價 → 該檔略過價格類觸發並記 note；公司行動取不到時照建（`test_fix_F3_C.py`）
+- **A3-X1-03**：Alpaca 新聞抓取失敗讓整個 review 失敗（全組合停買） → 只略過新聞類觸發；新聞起點不早於 asof−回看天數（同上）
+
+### 回寫與引擎
+
+非分析性停止與亂序回寫（F3-OO）
+- **A3-M5A-01**：D80 非分析性停止只認 STEP0，FULL_B 輸出不合格（G6／G7）會撤買單、批次歸 0、閘門寫 False → 呼叫端明示 non_analytic：三閘門 null、記 `non_analytic_stop`；資料檢查不過（D20、資料包失敗）仍失敗關閉（`test_fix_F3_OO.py`）
+- **A3-M6A-01**：非分析性停止後次日 revalidate 撤掉刻意保留的買單 → 不撤（同上）
+- **A3-M6E-04、A3-M6A-02**（D87）：非持股觀察檔遇非分析性停止被空白列覆寫 → 以既有登錄表為底，只改 status、last_reason_code、last_review_date；估值欄、價格線、等級、T、失效條件保留，不推進 last_full_review_date（同上）
+- **A3-M6E-01**：誠信淘汰標記被之後的 MISSING_DATA／TOO_HARD 停止清掉 → 保留（D27）（同上）
+- **A3-M6B-04**（D86）：亂序回寫靠逐函式補守衛 → 工作啟動與 post 前，該檔已有 decision_date 晚於工作資料日的決策 → `skipped`（stale_asof），不呼叫模型、不回寫、不算失敗；PRICE、佔位、run 收尾、D80 停止不算較新決策（同上）
+- **A3-M6B-01**：舊資料日 HOLD_REVIEW／THESIS 疑似晚寫入會降等級、重開觀察期 → 只留決策與複查日（同上）
+- **A3-M6B-02、A3-M6D-01**：舊資料日完整分析 BUY 晚寫入，與較新卡拼成可下單決策 → 當 WATCH；daily 晚到買進同樣核對（同上）
+- **A3-M6B-03**：latest_signal／latest_card 無資料日上界 → 依 asof 取卡（同上）
+- **A3-M6D-02**：舊資料日 BUY 晚寫入清掉較新的疑似觀察期、把等級升回 → 不清、不升（同上）
+- **A3-M6D-03**：資料日之後只有 PRICE 時，舊資料日完整分析不寫等級／T／cap_inputs → 照寫（PRICE 不算較新決策）（同上）
+- **A3-M6D-05**：補跑舊資料日的 G8 比較檔沒說持股是現況 → 加註（同上）
+- **A3-M5B-01**：框架把 FULL_B 的 BUY 降成 WATCH（G8 等）後閘門、PASS_ALL、T 照舊，PRICE 可直接加碼 → 新 reason_code `FRAMEWORK_HOLD`；PRICE 的 ADD → HOLD、BUY → WATCH；模型自判 WATCH 不改碼（同上；review_due 對 FRAMEWORK_HOLD 不排 PRICE 升級：`test_fix_F3_WB.py`）
+- **A3-M6A-03、A3-M6C-01**：G8 best_watch 收進 PRICE 不能升 BUY 的觀察檔或上限為 null 者 → 排除（`test_fix_F3_OO.py`）
+- **A3-M6A-04、A3-M6B-09、A3-M6C-02**：HOLD_REVIEW 降等後，比較檔與買進排序仍用 cap_inputs 等級 → 取較嚴等級，`sizing.live_g8` 同口徑（同上）
+
+回寫雜項（F3-WB）
+- **A3-M5E-06**：HOLD_REVIEW 重跑 post 重複記異常、覆寫結果 → 冪等（`test_fix_F3_WB.py`）
+- **A3-M6B-05**：fallback 旗標由引擎另一筆 UPDATE 補寫（非原子） → 回寫函式自己寫（同上）
+- **A3-M6C-03**：no_cap／stale_sold 後日誌仍記舊上限，PRICE 90 天節流誤判 → 標 cap_not_applied、不計入節流（同上）
+- **A3-M6C-07**：合股後誤判「回到線下」可再次荒謬級減碼 → 決策價依比例換算（同上）
+- **A3-M6E-02**：write_full_result 在提交後、換檔前中斷，重跑早退跳過後續步驟 → 重跑補完；已有較新完整分析時不換上舊暫存檔（同上）
+- **A3-M8B-07**：持股停止回寫保留 origin → 分析性停止去掉 origin，非分析性保留（同上）
+- **A3-M7A-02**（回寫端）：沒賣成的荒謬級減碼被當成已減過 → 不算，下次仍可 TRIM（同上；review_due 端見 `test_fix_F3_SZ.py`）
+- **A3-M5C-01**：P-29 尾部損失填小數被 25% 下限吞掉 → 小數保守換算（同上）
+
+引擎、模型層與同意閘門（F3-B、F3-RE）
+- **A3-M5A-02**：驗證重試要求「判斷同前次」卻不附前次輸出；FULL_A 退回不附上一版 → 附上（截斷）（`test_fix_F3_B.py`）
+- **A3-M5C-06**：驗證重試因中斷／預算延後時丟失回饋 → 續跑接著那次嘗試、帶回饋（同上）
+- **A3-M5B-06**：openai_compat 逾時不走 D47 重試 → 拋 LLMTimeout、重試一次（同上）
+- **A3-M5C-02**：額度判定掃到模型文字（credit facility） → 不含裸 credit（同上）
+- **A3-M5E-02**：hark_queue 後端接回舊佇列不重寫原始提示、讀到半份回應 → 重寫提示、抽不出 JSON 時再等一輪重讀（同上）
+- **A3-M5E-03**：價格盲工作的隔離沙箱永不清除 → 終態即刪（同上；引擎啟動清理不變：`test_fix_F3_RE.py`）
+- **A3-M5E-04**：macOS 使用者可寫系統路徑（/usr/local、/Applications、/Library）未封鎖寫入 → 加入封鎖（`test_fix_F3_B.py`）
+- **A3-M5B-02**：持股強模型工作失敗、已由替代 HOLD_REVIEW 收尾後，同意列永遠 approved 擋加碼 → 結案（同上）
+- **A3-M5E-05**：拒絕分三次提交，寫回失敗時該檔卡住 → 先寫結論再結案，冪等鍵可重拒（同上）
+- **A3-M5B-03**（設計題選 A）：FULL_A 框架退回不設上限 → 不加上限，同意估算計入可能的重試（同上）
+- **A3-M3E-01**：驗證 schema 在引擎建立時快取 → output_schemas.json 改過就重讀（`test_fix_F3_RE.py`）
+- **A3-M3E-02**：build_prompt 預設 `{pkg}` 是真實專案根、基底 post 收模型檔 → 預設不再是專案根，基底 post 不收模型檔（同上）
+
+### 價格盲
+
+- **A3-M4D-01**（D84）：增資／ATM 句同時有股數與總額，可除出發行價 → 遮總額、留股數；原句只寫進價格檔 `offering_proceeds`；跨句與「N 股 at $X」也處理（`test_fix_F3_C.py`）
+- **A3-M4D-02**：EX-13／舊 10-K 無 Item 5 標題的季度股價表不遮 → 遮；返工：表後緊接財報表時不外溢、目錄行不開視窗（同上）
+- **A3-M4D-03**：closed at／traded at／last reported sale price／收在 X 美元 漏網 → 刪；帶量詞（交易總額）的不刪（同上）
+- **A3-M4D-04**：授予／既得總公允價值（÷股數＝股價）漏網 → 刪；以授予日公允價為量測基礎的總費用句保留（同上）
+- **A3-M4D-05**：可轉債轉換率（推得轉換價）未遮 → 刪（同上）
+- **A3-M4D-06**：yield 黏字、扣股繳稅股數＋價值、併購每股對價 right to receive $X 漏網 → 刪；股利扣繳稅款總額保留（同上）
+- **A3-M5B-04**：價格標題濾網放在 jobs 層、TRIAGE 漏用 → 移到 `dossier_prep.is_price_headline`，TRIAGE 項目一律過濾（`test_fix_F3_PB.py`）
+- **A3-M5D-01**：review_due 的「未檢查」註記原文交給 THESIS／FULL_A（洩漏現價位置） → trigger_text 略過（同上）
+- **A3-M5D-02**：價格／估值型失效條件在 THESIS 只見佔位、比對失敗不更新 next_due → 依序號對應回原文；價格型到期交 PRICE（同上）
+- **A3-M6D-04**：H2 論點增補只靠黑名單過濾 → 價格盲工作讀增補時改白名單；看得到價格的 HOLD_REVIEW 不套（同上）
+- 另見 A3-M3D-01（TRIAGE 新聞 URL、triage_result 價格盲版）、A3-M1D-01（X5 錨定）於上節
+
+### 部位與日常流程
+
+daily（F3-DY）
+- **A3-M7A-04**：排程只排最早未完成 daily，但較晚日先跑後較早日永遠補不了 → 較早交易日未完成時拒跑較晚日（`--force` 略過）（`test_fix_F3_DY.py`）
+- **A3-V3-3-03**：較早 daily 失敗、較晚已完成時看不出缺口 → 排程健康警示（同上）
+- **A3-M7D-02、A3-V3-3-01**：同窗口較晚的 TRIAGE 日誌／THESIS 完好／D80 停止（含使用者拒絕強模型）吞掉未下單 BUY → 這些不算結論，BUY 照下、已掛買單不撤（同上）
+- **A3-M7D-03**：延後的買進用之後較新的卡重核 → 用該決策自己的卡（同上）
+- **A3-M7B-05**：換股候選被較新的 TRIAGE 日誌結案 → 完整分析 WATCH 才結案（同上）
+- **A3-X1-01、A3-X2-01**：SELL_ALL 後同窗口（或賣單未成交時）仍排 BUY／加碼 → 全清中不排，買回走新建倉（同上）
+- **A3-X1-02**：人工撤單後同日重跑把 BUY 重掛 → manual_cancel 也算已處理（同上）
+- **A3-X2-02**：SELL_ALL 股數固定於下單時、撮合順序造成殘股 → 成交帳上全部股數（同上）
+- **A3-M7C-01**（D88）：比例類公司行動未入帳時放行 SELL_ALL 會用拆後價賣錯 → 比例類／需人工／未知且事件日 ≤ 撮合日：不撮合、委託保留；現金股利照 D06 放行（同上）
+- **A3-M7D-05**：book.pause 與 broker 文件仍寫暫停擋 SELL_ALL → 文件與行為一致（同上）
+- **A3-M7B-06**：交易日判定三套來源 → 同意逾期也用 daily 的 Alpaca 日曆（含臨時休市）（同上）
+- **A3-M7C-04**：Alpaca 日曆回空清單覆寫快取 → 不覆寫、改用快取（同上）
+- **A3-M7C-06**：觀察名單的現金股利也派 CORP_ACTION，一個失敗停全組合 → 無持股、無委託者不派（同上）
+- **A3-M7E-03**：daily 非引擎階段收到 SIGTERM，run 永遠停在 running → 記 failed 與 error_stage（同上）
+- **A3-X2-03**：「連 10 日高於上限」與批次許可口徑不同 → 都含滑價（同上）
+- **A3-M7E-01**（daily 派工端）：中斷後孤兒 CORP_ACTION 與重派工作同時跑 → 同一事件只跑一個（同上；apply 端去重見 F3-CA）
+- **A3-M7A-08**：watch 成功不結案連敗異常、提示仍寫須 reset → 成功結案，提示改自動再試（D81）（同上）
+- `ledger adjust` 同一指令 `--ticker X`＋`--cash`＋`--unpause X`＝人工已入帳 → 結案 corp_action_job_failed、不再重派；異常標籤反映解除狀態（同上）
+
+部位（F3-SZ）
+- **A3-M7A-02**（review_due 端）、**A3-M7A-03**：沒賣成的荒謬級減碼擋住後續減碼；同日重跑把已下單 TRIM 標成未成交 → 未成交才標 unfilled，委託仍 open 或已成交不標（`test_fix_F3_SZ.py`）
+- **A3-M7B-07**：CONTRACTS_M7 與 recheck_pending 文件未寫 D82 冷靜單與 unfilled → 補（同上）
+- **A3-M6B-08**：建倉期外加碼的 T 有兩個來源 → T＝min(訊號卡 T, 登錄表 target_weight, 等級上限)（同上）
+- **A3-M6C-05**：現金縮量以收盤算股數、以限價預扣 → 以限價算股數（同上）
+- **A3-M6C-06**：P-31 剩餘額度沒算候選自身尾部，買後可越界 → Σw·l＋x·l_c ≤ 10pp（同上）
+- **A3-M6E-03**：只 UPDATE 不提交，留下隱式交易 → 提交，出錯整筆回滾（同上）
+
+公司行動（F3-CA）
+- **A3-M7E-01**：中斷重跑時同一事件可能拆股兩次 → 依 event_id 去重，入帳一次（`test_fix_F3_CA.py`）
+- **A3-M7A-07**：8-K 去重只比生效日，拒收列重派並重插暫停異常 → 不重派、不重插（同上）
+- **A3-M7C-03**：8-K 窗口放寬時 date_before 標成窗口下界 → 仍是前一交易日（同上）
+- **A3-M7B-04**：代號變更漏改 approvals、jobs、cap_input_file → 一起改（同上）
+- **A3-M7C-07**：現金股利發放日以模型輸出優先 → 以 Alpaca 為準，不同時另記（同上）
+- **A3-M7C-08**：0 股準時拆股，冷靜 BUY 判斷錯誤未換算 → 照比例換算（同上）
+
+### 帳本、報表、CLI、儀表板
+
+帳本與 CLI（F3-LEDGER）
+- **A3-M7A-01**：對帳改股數時換算未成交 TRIM 限價（可低於觸發線） → 對帳不改 TRIM 限價；拆股照換算（`test_fix_F3_LEDGER.py`）
+- **A3-M7A-05**：同時 `--unpause` 會蓋掉股數警示 → 附加不覆蓋（同上）
+- **A3-M7A-06**：對未持有代號 `--qty 0` 清登錄表 → 拒絕（同上）
+- **A3-V3-3-02**：`--unpause` 把公司行動工作失敗事件一起結案、不再重派 → 只解除暫停、事件照樣重派；同一指令改了該檔股數＝已人工入帳才結案；分兩次指令時重派遇 manual_adjust 轉人工、不重複入帳；之後同事件再失敗不重新暫停，只記 attempts（同上）
+- **A3-M8A-01**：人工指令的日期用本機日 → 用紐約日（同上）
+- **A3-M8C2-01**：入金可回填到已算淨值的日期 → 等於最後淨值日記到下一交易日，早於則拒絕（同上）
+- **A3-M8B2-01**：人工賣出不扣未成交賣單，兩張合計可超過持股 → 扣除（同上）
+- **A3-M8B-02**：approvals reject／defer、`fetch --freeze-pe` 未取寫入鎖；儀表板同類操作 → 取鎖，忙碌回 409（同上）
+- **A3-M8B-03**：調帳時 cap_inputs 換算失敗無聲 → 記異常、暫停該檔並警示（同上）
+- **A3-M8B-06**：儀表板啟動的 run-approved 被寫入鎖擋下後狀態沒有結束時間 → 補 finished_at 與錯誤（同上）
+- **A3-M8E-01**：doctor 跟隨轉址 → 不跟隨，3xx 報 FAIL（同上）
+- **A3-M8C-02、A3-M8D-06**：預算 0 次呼叫的語意、帳戶設定範圍到撮合中途才報錯 → 0＝不限；負值與越界在載入時擋（同上）
+
+報表與匯出（F3-CLI）
+- **A3-M8C2-02**：總覽把尚未進淨值的入金算進投入 → 另列「待入帳」（`test_fix_F3_CLI.py`）
+- **A3-M8A-03**：停損字樣偵測不辨否定句 → 辨識否定句（同上）
+- **A3-M8B-05**：analyses 匯出缺 provenance → 補（NULL＝本機原生）（同上）
+- **A3-M8C2-03**：觀察名單收盤價來源錯 → 用 watch 的收盤（同上）
+- **A3-M8C2-06**：PORTFOLIO 框架自發單混在合規統計 → 另列（同上）
+- **A3-M8C2-07**：檢討報告只給數字 → 列出停損賣出、晚申報、缺價代號（同上）
+- **A3-M8C2-08**：只有一根 K 也算缺價 → 不算（同上）
+- **A3-M8C2-09**：registry 資料集名稱與內容不直覺 → 註明是非持股列，meta 附說明（同上）
+- **A3-M8C2-12**：排程健康看不出全域暫停與從未完成 daily → 顯示（空資料庫不警示）（同上）
+- **A3-M8E-05**：xlsx 匯出控制字元與公式注入 → 清除／跳脫（同上）
+
+儀表板（F3-WD）
+- **A3-M8C2-10**：基準代號寫死 SPY → `/api/summary` 帶設定的基準，網頁取 `s.bench`（`test_fix_F3_WD.py`）
+- **A3-M8C2-11、A3-M8C2-13**：分析頁滿 200 筆未標示、匯出按鈕看似帶篩選 → 標「最近 200 筆」、標明匯出全部（同上）
+- **A3-M8C2-14**：小儀表板編譯失敗時伺服器也沒載入 → 伺服器照常載入，只印警告（同上）
+- **A3-M8C-04**：charts 文件說有快取 → 改為實際（無快取）（同上）
+
+### 文件
+
+- **A3-M8B2-02**：`test_hark_fixes_20261018.py` 改名 `test_rules_fixes_20261018.py`；**A3-M8B2-03**：CONTRACTS.md db 段補版本 2／3 與 `backup`；**A3-M8C2-04**：人工暫停期間 SELL_ALL 照建委託、撮合時擋，解除後次日自動撮合（不要另補賣單），CONTRACTS_M5、book.pause、本檔一致；**A3-M8B2-08**：本檔 §0 覆寫；**A3-M8C2-05**：三句歷史文字句尾加註已完成；**A3-M8E-02**：換機程序 §4 還原補 cap_inputs、theses、decisions void（`test_fix_F3_WD.py`）
+- procedure／SKILL／rulebook／inferred_thresholds（F3-DOCa）：**A3-M2A-04**（申報抓取失敗只略過申報類觸發）、**A3-M2A-05**（觸發表補 NT 延遲申報、失效條件到期）、**A3-M2A-10**（困境④「誰來動刀」driver_id）、**A3-M2C-03**（D74 13 週節流寫入）、**A3-M2C-04**（P-58 多年浮存金成本）、**A3-M2C-05**（降級表補 SEL-059、060②④、047、RISK-090）、**A3-M2C-11**（A 級 >3 檔重驗標「框架不檢查」）、**A3-M2C-12**（壞引用）、**A3-M2D-02**（遮蔽描述更新）、**A3-M2D-03**（同業估值標價格類，D40）、**A3-M2F-03**（procedure/09 舊安全邊際條文）、**A3-M2F-07**（D94：POS-064 紙上期不適用）、**A3-M2C-08**（總表與組合摘要由宿主產出）
+- rule_index／knowledge／RED_TEAM 提示（F3-DOCb）：**A3-M2F-01、02、04、05、09**（節號、舊決策編號撞號、SELL-037 比例、持有側覆寫、POS-033 口徑）、**A3-M2F-08**（D94：RISK-090 係數只作用報告欄 P1）、**A3-M2G-01～16**（knowledge 各檔與價格盲、ASK-1、SKILL 宿主覆寫衝突的句子改寫或加註；RED_TEAM 引用補完整路徑）、**A3-M2H-01～03、05～18**（ASK-1 後殘留舊安全邊際條文、P/E 不新買、警訊扣分、前半規則以價格為條件等）；knowledge 各檔檔頭標「思考背景、衝突以 SKILL／rulebook 為準」
+- A3-M2H-04 依 D85（VAL-111 只記錄不否決）
+
+### 設計決策 D86–D99 摘要
+
+| 編號 | 決定 |
+|---|---|
+| D86（A3-M6B-04） | 亂序回寫：工作啟動與 post 前，該檔已有資料日更新的決策 → 工作 skipped（stale_asof），舊日期結果不得覆寫較新決策；PRICE、佔位、run 收尾、D80 停止不算較新決策。各回寫函式的守衛保留為第二道防線 |
+| D87（A3-M6E-04／M6A-02） | 非分析性停止對非持股觀察檔：登錄表以既有列為底，只改 status、last_reason_code、last_review_date，估值欄與價格線保留 |
+| D88（A3-M7C-01） | D06 收窄：比例類／需人工／未知公司行動未入帳且事件日 ≤ 撮合日 → SELL_ALL 不撮合；現金股利照放行 |
+| D89（A3-M8B-01） | B 機產生的 BUY／ADD 在匯出副本降為 WATCH（保留原訊號、標待 A 機複核）；框架不改 |
+| D90（A3-M2B-01） | 刪除退化的結論翻轉測試；auto_buy_cap＝0.95×min(P2′, k×IV_base)，不放寬買點 |
+| D91（A3-M2B-02） | 文件改為實際式：r_stress＝max(10%, 30 年期＋6pp)，起始長債低於 20 年中位時＋7pp；r_sens＝max(10%, ＋7pp)（低利率起點＋8pp），只作報告。程式不改 |
+| D92（A3-M2B-03） | 紅燈只重跑一次並帶上次致命路徑；連續第二次紅燈回一般節奏、維持 WATCH，不自動減半或降級 |
+| D93（A3-M2B-05） | 模型填 g_adjustment_reason 時，g 差異只記註不退回；E、K 照核 |
+| D94（A3-M2F-07／08） | POS-064 紙上期無清算日不適用；RISK-090 係數只作用報告欄 P1，不改 k |
+| D95（A3-M1B-03） | 撤銷結構性刪除不保證進短名單；要深度分析須手動 `analyze --tickers` |
+| D96（A3-M1B-04） | 不改：初篩對 MISSING_DATA 每季重排維持現狀 |
+| D97（A3-M2A-02） | incr_roic_gt_rd 三值：true／false／null（null＝資料不足，不改上限）；false → 上限 ≤ IV0×等級係數 |
+| D98 | 與 D86 同一原則：舊日期結果不得覆寫較新決策；PRICE 不算較新決策（資料日之後只有 PRICE 時，舊資料日完整分析照寫等級／T／cap_inputs）。回寫端對應修復見上「非分析性停止與亂序回寫」 |
+| D99（對應 A3-M3D-04） | FULL_B 等級高於上限 → 框架壓回上限並記註，不退回 |
+
+另：新 reason_code `FRAMEWORK_HOLD`（A3-M5B-01）＝FULL_B 判 BUY 但被框架降成 WATCH；PRICE 不得把它升成買進。SEC 封鎖：沒有舊快取照舊上拋；舊快取比例 >10% 不凍結 P/E、初篩失敗（A3-M1E-01）。
+
+### 刻意不修／後續觀察
+
+- **A3-M1B-04**：依 D96 不改（初篩對 MISSING_DATA 不套節流）；r3 後視重排頻率再議。
+- `_kill_criteria` 的估值型失效條件在 THESIS 可見：本輪只做依序號對應與價格型到期交 PRICE（A3-M5D-02），條文本身是否要從 THESIS 輸入移出，建議另立一題。
+- 紅隊判「數字錯」時，訊號仍保留 PASS_ALL 的缺口：本輪未改，建議另立一題。
+- **A3-M8B2-13**：換機程序 §1 第 4 步的名單，等 r3 名單定案後改（設計題待定）。
+- 復查判 OVERENGINEERED（A3-M1C-04 只加註記、A3-M4B-03、A3-M6B-06、A3-M6B-07、A3-M7C-05、A3-M7E-04）與 REJECTED（A3-M5A-04、A3-M6C-04）不修。
+
+### 交接待辦
+
+1. r3 名單與 run-id：待使用者決定（預定沿用 r2 的 15 檔）；定案後寫進 §0 並改換機程序 §1 第 4 步。
+2. `exclusions.csv`、`universe_override.txt`：待使用者回答。
+3. A 機同步本次 commit 的修復；A 機實跑前確認 M5-D8-01／02 已修。

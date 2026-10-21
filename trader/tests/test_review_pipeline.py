@@ -50,6 +50,13 @@ class FakeFred:
     def t30_median_20y(self, asof):
         return 0.034
 
+    def latest(self, sid, asof):   # D29 利率段的 3 個月國庫券（X29）
+        assert sid == "DGS3MO"
+        return 3.9, "2026-10-14"
+
+    def mean(self, sid, asof, years):
+        return {("DGS30", 5): 4.0, ("DGS30", 10): 3.3, ("DGS3MO", 5): 2.5, ("DGS3MO", 10): 1.5}[(sid, years)]
+
 
 class BrokenFred(FakeFred):
     def t30(self, asof):
@@ -237,13 +244,15 @@ def test_params_basic_and_review_fields(env, no_engine):
     s = run_review(cfg, paths, conn, ASOF, clients=clients, offline_filings=_offline(tmp))
     p = json.loads([r for r in _jobs(conn, s["run_id"]) if r["ticker"] == "FUL"][0]["params"])
     assert p["price"] == CLOSE and p["price_date"] <= ASOF   # 決策日之後的 999 不得進來
-    assert p["rates"] == {"t30": 0.047, "t30_date": "2026-10-15", "t30_20y_median": 0.034}
+    assert p["rates"] == {"t30": 0.047, "t30_date": "2026-10-15", "t30_20y_median": 0.034,
+                          "t3m": 0.039, "t3m_date": "2026-10-14", "t30_mean_5y": 0.04, "t30_mean_10y": 0.033,
+                          "t3m_mean_5y": 0.025, "t3m_mean_10y": 0.015}
     assert set(["screen_context", "portfolio_state", "largecap_pe"]) <= set(p)
     assert p["cik"] == "0000000002" and p["base_action"] == "FULL" and p["holding"] is False
     assert p["reasons"] and p["thesis_file"] is None
-    # 價格範圍：start = asof − 200 曆日，raw 調整，只到 asof
+    # 價格範圍：start = asof − 200 曆日，拆股調整（M7-D1-05），只到 asof
     _, start, end, adj = clients["alpaca"].bar_calls[0]
-    assert end == ASOF and adj == "raw" and start == "2026-03-30"
+    assert end == ASOF and adj == "split" and start == "2026-03-30"
     daily = pd.read_csv(paths.work / s["run_id"] / "daily.csv")
     assert list(daily.columns) == ["ticker", "date", "close"] and daily["date"].max() <= ASOF
     assert 999.0 not in set(daily["close"])
@@ -279,10 +288,14 @@ def test_skill_failure_marks_run_failed(env):
     assert conn.execute("SELECT status FROM runs WHERE run_id=?", (s["run_id"],)).fetchone()[0] == "failed"
 
 
-def _triage_flow(env):
+def _triage_flow(env, auto_buy_cap=100):
+    """預設上限 100（現價 105 > 上限 → base_action NONE），只測 TRIAGE→THESIS。
+    上限 110 時 base_action=PRICE，THESIS 判完好後依 M2_D7_01 續跑（見 test_triage_base_price_thesis_intact_continues）。"""
     cfg, paths, conn, tmp = env
-    _seed(conn, {"TRI": SEED["TRI"]})
-    fake = FakeRunner(responses={"TRIAGE": TE.triage(True), "THESIS": TE.thesis("完好")})
+    _seed(conn, {"TRI": (SEED["TRI"][0], {**SEED["TRI"][1], "auto_buy_cap": auto_buy_cap})})
+    # 輸出 ticker 須與工作相符（M3_D1-10）
+    fake = FakeRunner(responses={"TRIAGE": {**TE.triage(True), "ticker": "TRI"},
+                                 "THESIS": {**TE.thesis("完好"), "ticker": "TRI"}})
     router = Router(cfg, paths.routing_json, dry_run=True, fake=fake)
     s = run_review(cfg, paths, conn, ASOF, clients=_clients(), router=router,
                    offline_filings=_offline(tmp, {"TRI": FILINGS["TRI"]}))
@@ -299,10 +312,20 @@ def test_triage_to_thesis_full_flow(env):
 
 
 def test_triage_escalation_carries_full_params(env):
-    s, conn = _triage_flow(env)
+    s, conn = _triage_flow(env, auto_buy_cap=110)
     thesis = [r for r in _jobs(conn, s["run_id"]) if r["job_type"] == "THESIS"][0]
     p = json.loads(thesis["params"])
     assert p["base_action"] == "PRICE" and p["cik"] == "0000000004" and p["kill_criteria"]
+
+
+def test_triage_base_price_thesis_intact_continues(env):
+    """M2_D7_01（P53）：base_action=PRICE 的 TRIAGE 升級成 THESIS、判完好後續跑；沒有 cap_inputs → DOSSIER。
+    （DOSSIER 本身因假 SEC 對照表沒有 TRI 會失敗，這裡只斷言續跑有建出來。）"""
+    s, conn = _triage_flow(env, auto_buy_cap=110)
+    rows = conn.execute("SELECT job_type, status, params FROM jobs ORDER BY rowid").fetchall()
+    assert [r["job_type"] for r in rows] == ["TRIAGE", "THESIS", "DOSSIER"]
+    assert [r["status"] for r in rows[:2]] == ["done", "done"]
+    assert json.loads(rows[2]["params"])["base_action"] == "PRICE"
 
 
 def test_cli_review_due_only(tmp_path, state_dir, monkeypatch, capsys):

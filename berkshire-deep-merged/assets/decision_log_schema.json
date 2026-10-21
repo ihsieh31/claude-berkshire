@@ -1,12 +1,24 @@
 {
- "_說明": "前瞻紙上交易決策日誌（references/13_forward_validation.md §2）。一筆決策一列（JSON Lines）；所有決策都記，包含閘門沒過的。標的代號只出現在日誌，不出現在 skill 文字。",
+ "_說明": "前瞻紙上交易決策日誌（references/procedure/13_forward_validation.md §2）。一筆決策一列（JSON Lines）；所有決策都記，包含閘門沒過的。標的代號只出現在日誌，不出現在 skill 文字。fields 以外另有框架選填欄（只在條件成立時寫入，不列入 fields，以免每列補空值）：price_file_opened_at_file＝FULL_B 開價格檔時間的留存檔路徑（相對 state；分析目錄 price_file_opened_at.txt），問卷先於看價由框架以檔案時間保證，作答檔的 price_file_opened_at 留空（M2-D10-04）；無此檔時不寫。",
  "schema": "berkshire-deep-merged/decision-log-v1",
+ "_framework_fields": {
+  "_說明": "框架填，模型不填（RM6-3／M6-RS5-02）：以下追溯欄由框架回寫時依條件附加，不列入 fields（不補空值、不計缺值率）；模型輸出 decision_log.json 不要填這些鍵，填了也會被框架覆寫或忽略。口徑：price_to_cap＝現價÷auto_buy_cap；buy_price_cap＝P2′（cap_calc 硬上限 cap；W-REV／成長 ≤1% 時不高於 IV0_cap，金融類＝min(P1, P4′)）。",
+  "auto_buy_cap": "PRICE：自動買進上限＝min(P2′, k×IV_base)（k：A 0.95／B 0.85）；price_to_cap 的分母",
+  "iv_base": "PRICE／HOLD_REVIEW：cap_calc 的 IV_base（基準內在價值／股）；未走到估值或沒有完整分析結論時為 null",
+  "long_rate": "PRICE：重算上限所用的長期利率（30Y）",
+  "gate3_source": "PRICE：閘門 3 判定的來源（取自哪一次完整分析）",
+  "weight": "PRICE：決策當時該檔的持股權重",
+  "trigger": "HOLD_REVIEW：觸發來源 {full_stage, final_signal, stopped_at_gate, reason_code}",
+  "grade_after": "HOLD_REVIEW：H2 確定性降一級後的等級（只降不升；有填才寫）",
+  "source_job_id": "產生本筆決策的工作 job_id（冪等鍵，M6-D9-03）",
+  "hold_flags": "持股相關的框架旗標（追溯用）"
+ },
  "fields": {
   "decision_id": "代號-決策日YYYYMMDD-序號，例：XXX-20261015-1；唯一",
   "decision_date": "YYYY-MM-DD",
   "time_zone": "Asia/Taipei 等",
   "ticker": "",
-  "action": "BUY | ADD | HOLD | TRIM | SELL_ALL | WATCH | NO_ACTION",
+  "action": "BUY | ADD | HOLD | TRIM | SELL_ALL | WATCH | NO_ACTION（閘門 3 問卷不過時框架收緊：停止級答案→NO_ACTION、「不知道」→NO_ACTION、其他→最多 WATCH；設計決策 D24）",
   "skill_hashes": "開跑時凍結的 sha256 清單檔路徑",
   "questionnaire_version": "",
   "screen_decision": "PASS | PASS-困境 | PASS-資料不足 | DELETE",

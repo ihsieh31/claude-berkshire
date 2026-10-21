@@ -12,11 +12,11 @@ import json
 import math
 from typing import Any
 
-from ..analysis.checks import _round, _skill_module, cap_input_problems
-from ..analysis.writeback import latest_signal
+from ..analysis.checks import _round, _skill_module, cap_input_problems, worse_grade
+from ..analysis.writeback import PRICE_NO_BUY_REASONS, signal_rows
 from ..ledger import book
 from ..paths import Paths
-from .sizing import MAX_HOLDINGS, NO_ADD_ABOVE, add_blocked
+from .sizing import GRADE_CAP, MAX_HOLDINGS, NO_ADD_ABOVE, NOT_VOIDED, add_blocked
 
 SCHEMA = "trader/holdings-g8-v2"
 TIE = 0.01   # procedure/06 §2：差 <1pp 視為同分，依品質（交模型判斷）
@@ -25,7 +25,8 @@ CERTAINTY_COEF = {"A": 0.9, "B": 0.75, "C": 0.5}   # SKILL G8（推論，±0.1�
 NOTE = ("G8 用：預期報酬＝oe_per_share ÷ close ＋ g0_cons（cap_calc 保守 g0），adjusted＝預期報酬 × 等級係數；"
         "close 為決策日收盤價，比較對象限決策當日可得選項，不得以自身買價作門檻（CORE-07）；"
         "cost_weight 為成本基礎權重，只供參考；market_weight 以收盤價計（缺價用平均成本）。"
-        "best_addable＝可加碼者中 adjusted 最高；weakest 只在持股 ≥10 檔時給（須勝過最弱持股）；"
+        "best_addable＝可加碼者中 adjusted 最高（可加碼＝A／B 級、收盤 < 重算的自動買進上限、"
+        "市值權重 < min(目標權重 T, 等級上限)、未暫停、未停止加碼、權重 ≤15%）；weakest 只在持股 ≥10 檔時給（須勝過最弱持股）；"
         "best_watch＝觀察名單中今天可買者（A／B 級且收盤 < 重算的自動買進上限）adjusted 最高；"
         "benchmarks 的 treasury／market 由框架計算（market 依 P-66／P-27，區內取值與摩擦為推論）。")
 
@@ -35,20 +36,26 @@ def _num(v: Any) -> float | None:
     return float(v) if ok else None
 
 
-def _valued_card(conn, ticker: str) -> dict:
-    """最近一張有保守價值的訊號卡（論點檢查等快速工作寫的卡沒有估值，跳過）。"""
-    rows = conn.execute("SELECT data FROM signals WHERE ticker = ? ORDER BY created_at DESC, rowid DESC",
-                        (ticker,)).fetchall()
-    for r in rows:
-        d = json.loads(r["data"] or "{}")
+def _reg(conn, ticker: str) -> dict:
+    row = conn.execute("SELECT data FROM registry WHERE ticker = ?", (ticker,)).fetchone()
+    return json.loads(row["data"]) if row and row["data"] else {}
+
+
+def _valued_card(conn, ticker: str, asof: str | None = None) -> dict:
+    """最近一張有保守價值的訊號卡（論點檢查等快速工作寫的卡沒有估值，跳過）。已作廢的卡不算（M8-D4-02）。
+    依資料日排序、asof 為上界（A3-M6B-03）；與 writeback.latest_signal 同一份查詢（signal_rows）。"""
+    rows = [r["data"] for r in signal_rows(conn, ticker, asof)]
+    for d in rows:
         if _num((d.get("value_per_share") or {}).get("conservative")) is not None:
             return d
-    return (latest_signal(conn, ticker) or {}).get("data") or {}
+    return rows[0] if rows else {}
 
 
-def _valuation(conn, paths: Paths, t: str, close: float | None, rates: dict | None) -> dict:
-    """以 cap_inputs 換上收盤與當日長債重跑 cap_calc：等級、保守價值、自動買進上限、預期報酬。"""
-    card = _valued_card(conn, t)
+def _valuation(conn, paths: Paths, t: str, close: float | None, rates: dict | None, asof: str | None = None) -> dict:
+    """以 cap_inputs 換上收盤與當日長債重跑 cap_calc：等級、保守價值、自動買進上限、預期報酬。
+    等級取 cap_inputs 與登錄表較保守者再算（HOLD_REVIEW 降等只改登錄表；上限與確定性係數同用降後等級，
+    與 PRICE、plan_buys 同口徑；A3-M6A-04、A3-M6B-09）。"""
+    card = _valued_card(conn, t, asof)
     row: dict[str, Any] = {
         "grade": None, "card_date": card.get("as_of"), "card_signal": card.get("signal"),
         "oe_per_share": None, "g0_cons": None, "owner_earnings_yield": None, "expected_return": None,
@@ -65,6 +72,12 @@ def _valuation(conn, paths: Paths, t: str, close: float | None, rates: dict | No
         row["notes"].append("缺決策日收盤價，無法計算預期報酬")
         return row
     x = {**x, "price": close}
+    reg_g = _reg(conn, t).get("grade")
+    g = worse_grade(x.get("grade"), reg_g)
+    if g is not None and g != x.get("grade"):
+        row["notes"].append(f"cap_inputs 等級 {x.get('grade')!r} 比登錄表 {reg_g!r} 寬：改用較保守的 {g!r}（A3-M6A-04）")
+        x["grade"] = g
+        row["grade"] = g
     if rates and _num(rates.get("t30")) is not None:
         x["long_rate"] = float(rates["t30"])
     if rates and _num(rates.get("t30_20y_median")) is not None:
@@ -80,6 +93,8 @@ def _valuation(conn, paths: Paths, t: str, close: float | None, rates: dict | No
     oe, g0 = _num(x.get("oe")), _num((cap.get("g0") or {}).get("cons"))
     row.update({"oe_per_share": oe, "g0_cons": g0, "iv_cons": _num(cap.get("IV_cons")),
                 "auto_buy_cap": _num(cap.get("auto_buy_cap"))})
+    # P-21 等降級後以 cap_calc 實際採用的等級取係數（與本標的 self_adjusted 同口徑）
+    row["grade"] = cap.get("grade_used") or row["grade"]
     if row["iv_cons"]:
         row["price_to_conservative"] = round(close / row["iv_cons"], 4)
     coef = CERTAINTY_COEF.get(row["grade"])
@@ -103,7 +118,7 @@ def _holding_row(conn, paths: Paths, t: str, pos: dict, close: float | None, pri
         "close": close, "price_date": price_date,
         "market_weight": round(mv / equity, 4) if equity > 0 else None,
         "cost_weight": round(cost_value / basis, 4) if basis > 0 else None,
-        **_valuation(conn, paths, t, close, rates), "addable": False, "not_addable": [],
+        **_valuation(conn, paths, t, close, rates, asof), "addable": False, "not_addable": [],
     }
     if t in paused:
         row["not_addable"].append("異常暫停交易")
@@ -112,17 +127,52 @@ def _holding_row(conn, paths: Paths, t: str, pos: dict, close: float | None, pri
         row["not_addable"].append(why)
     if row["market_weight"] is not None and row["market_weight"] > NO_ADD_ABOVE:
         row["not_addable"].append(f"權重 > {NO_ADD_ABOVE:.0%}（P-43）")
-    if row["grade"] not in ("A", "B"):
+    # 等級取估值等級與登錄表等級較保守者（HOLD_REVIEW 降等只改登錄表；與 review_jobs PRICE、plan_buys 同口徑，M6-R2-02）
+    rg = conn.execute("SELECT data FROM registry WHERE ticker = ?", (t,)).fetchone()
+    g = worse_grade(row["grade"], (json.loads(rg["data"]) if rg and rg["data"] else {}).get("grade"))
+    if g not in ("A", "B"):
         row["not_addable"].append("等級非 A／B，不加碼")
+    cap = row["auto_buy_cap"]
+    if close is None or cap is None:
+        row["not_addable"].append("缺收盤價或自動買進上限")
+    elif close >= cap:
+        row["not_addable"].append("收盤 ≥ 自動買進上限")
+    # D14：只有還有加碼空間（權重 < min(目標 T, 等級上限)）才算決策當日可得選項
+    room = _add_room_limit(conn, t, g)
+    if room is not None and row["market_weight"] is not None and row["market_weight"] >= room[0]:
+        row["not_addable"].append(f"權重 {row['market_weight']:.2%} 已達 {room[1]} {room[0]:.2%}，無剩餘加碼空間")
     row["addable"] = not row["not_addable"]
     return row
 
 
+def _add_room_limit(conn, t: str, grade: str | None) -> tuple[float, str] | None:
+    """加碼空間上限 min(目標權重 T, 等級上限)。T 取登錄表 target_weight（框架 T），缺時取建倉計畫 target_weight；
+    兩者都缺 → 只用等級上限（推論）。等級非 A／B 已另列不可加碼 → None。"""
+    gcap = GRADE_CAP.get(grade)
+    if gcap is None:
+        return None
+    row = conn.execute("SELECT data FROM registry WHERE ticker = ?", (t,)).fetchone()
+    reg = json.loads(row["data"]) if row and row["data"] else {}
+    tw = _num(reg.get("target_weight"))
+    if tw is None:
+        tw = _num((reg.get("build_plan") or {}).get("target_weight"))
+    if tw is None or tw >= gcap:
+        return gcap, f"{grade} 級上限"
+    return tw, "目標權重 T"
+
+
 def _watch_row(conn, paths: Paths, t: str, close: float | None, price_date: str | None,
-               rates: dict | None, paused: set[str]) -> dict:
-    """觀察名單：只有今天真的買得到（A／B 級、收盤 < 重算的自動買進上限、未暫停）才算 G8 的可得選項。"""
+               rates: dict | None, paused: set[str], asof: str | None = None) -> dict:
+    """觀察名單：只有今天真的買得到（A／B 級、收盤 < 重算的自動買進上限、未暫停）才算 G8 的可得選項。
+    登錄表 last_reason_code ∈ PRICE_NO_BUY_REASONS（GATE3_FAIL、RED_LIGHT、FRAMEWORK_HOLD：PRICE 不能升成 BUY，D24）
+    或登錄表 auto_buy_cap 為 null（不買，失敗關閉）也不算（D14；A3-M6A-03、A3-M6C-01）。"""
     row: dict[str, Any] = {"ticker": t, "close": close, "price_date": price_date,
-                           **_valuation(conn, paths, t, close, rates), "buyable": False, "not_buyable": []}
+                           **_valuation(conn, paths, t, close, rates, asof), "buyable": False, "not_buyable": []}
+    reg = _reg(conn, t)
+    if reg.get("last_reason_code") in PRICE_NO_BUY_REASONS:
+        row["not_buyable"].append(f"上次完整分析 {reg['last_reason_code']}：須重跑完整分析才能買（D24）")
+    if "auto_buy_cap" in reg and reg["auto_buy_cap"] is None:
+        row["not_buyable"].append("登錄表無自動買進上限（不買）")
     if row["grade"] not in ("A", "B"):
         row["not_buyable"].append("等級非 A／B（最多觀察）")
     cap = row["auto_buy_cap"]
@@ -145,7 +195,8 @@ def watchlist_tickers(conn) -> list[str]:
 
 def _pick(r: dict | None) -> dict | None:
     return ({"ticker": r["ticker"], "grade": r["grade"], "expected_return": r["expected_return"],
-             "adjusted_expected_return": r["adjusted_expected_return"]} if r else None)
+             "adjusted_expected_return": r["adjusted_expected_return"],
+             "price_to_conservative": r.get("price_to_conservative")} if r else None)   # HOLD_REVIEW P-53 換股門檻（F3-DP）
 
 
 def summarize(rows: list[dict], n_holdings: int, watch: list[dict] | None = None) -> dict:
@@ -173,12 +224,22 @@ def holdings_g8(conn, paths: Paths, asof: str, closes: dict[str, dict], rates: d
     pdate = lambda t: d if isinstance(d := (closes.get(t) or {}).get("price_date"), str) else None
     rows = [_holding_row(conn, paths, t, p, px[t], pdate(t),
                          equity, basis, rates, asof, paused) for t, p in pos.items()]
-    watch = [_watch_row(conn, paths, t, px[t], pdate(t), rates, paused) for t in wl]
-    return {"schema": SCHEMA, "asof": asof, "n_holdings": len(rows), "max_holdings": MAX_HOLDINGS,
-            "holdings": rows, "watchlist": watch, **summarize(rows, len(rows), watch),
-            "benchmarks": benchmarks(fred, asof),
-            "note": NOTE if rows or watch else "紙上帳本無持股、觀察名單空：加碼持股與觀察名單兩列不適用；"
-                                              "國庫券與大盤兩列照 benchmarks"}
+    watch = [_watch_row(conn, paths, t, px[t], pdate(t), rates, paused, asof) for t in wl]
+    from .correlation import portfolio_groups
+    try:
+        corr = portfolio_groups(conn, {t: p for t, p in px.items() if p is not None and t in pos})
+    except Exception as e:  # noqa: BLE001 - 相關群算不出不讓比較檔失敗
+        corr = {"error": f"{type(e).__name__}: {e}"}
+    later = conn.execute(f"SELECT MAX(substr(decision_date, 1, 10)) FROM decisions WHERE {NOT_VOIDED}").fetchone()[0]
+    out = {"schema": SCHEMA, "asof": asof, "n_holdings": len(rows), "max_holdings": MAX_HOLDINGS,
+           "holdings": rows, "watchlist": watch, **summarize(rows, len(rows), watch),
+           "benchmarks": benchmarks(fred, asof), "correlation": corr,
+           "note": NOTE if rows or watch else "紙上帳本無持股、觀察名單空：加碼持股與觀察名單兩列不適用；"
+                                             "國庫券與大盤兩列照 benchmarks"}
+    if later and later > asof:   # A3-M6D-05：補跑舊資料日時比較檔讀的是現況持股與登錄表，只標註
+        out["note"] += (f"（補跑舊資料日 {asof}：已有 {later} 的決策；持股、觀察名單與登錄表等級、上限、目標權重為現況，"
+                        f"不是 {asof} 當日狀態；訊號卡只取資料日 ≤ {asof} 者，A3-M6D-05）")
+    return out
 
 
 def for_ticker(view: dict, ticker: str) -> dict:
@@ -240,6 +301,12 @@ def write_view(conn, paths: Paths, run_id: str, asof: str, closes: dict[str, dic
     p = view_path(paths, run_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(view, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    corr = view.get("correlation") or {}
+    if corr and "error" not in corr:   # P-31／P-32 組合摘要與 >10% 減碼建議（只建議，寫不暫停的異常）
+        (p.parent / "corr_groups.json").write_text(json.dumps(corr, ensure_ascii=False, indent=1, default=str),
+                                                    encoding="utf-8")
+        from .correlation import record_trim_anomalies
+        record_trim_anomalies(conn, corr, asof)
     return view
 
 

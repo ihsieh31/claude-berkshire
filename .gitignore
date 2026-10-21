@@ -1,7 +1,20 @@
-# 金鑰：只放範本 trader/.env.example
+# 金鑰：只放範本 trader/.env.example（.env.*／.env~／*.swp 擋備份與編輯器暫存；!.env.example 必須在最後）
 .env
 *.env
+.env.*
+.env~
+*.swp
 !.env.example
+
+# Hark（雲端 B 機）專用：作答規範、留言板、加密封存、稽核、執行設定；不上傳、不進 patch（使用者 2026-10-18 09:48）
+hark/
+hark_env.sh
+HARK_執行說明.md
+trader/config.hark.yaml
+
+# 匯出與修補產物（一律寫到 repo 外；這裡再擋一層）
+*.patch
+EXPORT_*
 
 # 執行期資料（資料庫、快取、分析結果、價格）：換機程序見 換機匯出與封存程序.md
 state/
@@ -10,6 +23,7 @@ state_*/
 export_state/
 berkshire_state_*.tar.gz
 berkshire_state_*.sha256
+berkshire_state_*.SUPERSEDED
 *.db
 *.db-shm
 *.db-wal

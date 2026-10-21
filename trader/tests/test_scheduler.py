@@ -1,4 +1,4 @@
-"""M7 常駐排程：補跑錯過的交易日、每月凍結、觀察名單、每季初選、月報、失敗重試與放棄、沒有期限。"""
+"""M7 常駐排程：補跑錯過的交易日、每月凍結、觀察名單、每季初選、月報、失敗重試與放棄（daily 不放棄見 test_fix_P23）、沒有期限。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -50,7 +50,8 @@ class FakeRunner:
         return 0
 
 
-def _sched(tmp_path, now, fail=(), bootstrapped=True):
+def _sched(tmp_path, now, fail=(), bootstrapped=True, last_screen="2026-08-20"):
+    """last_screen：初始 bootstrap 寫入的上次初選日（None＝狀態檔沒有，D09）。"""
     env = make_env(tmp_path, {})
     if bootstrapped:
         db.insert(env.conn, "registry", {"ticker": "KO", "status": "WATCH", "data": "{}", "updated_at": db.now_iso()})
@@ -59,6 +60,8 @@ def _sched(tmp_path, now, fail=(), bootstrapped=True):
     run = FakeRunner(env, fail)
     s = Scheduler(env.config, env.paths, runner=run, now=clock, calendar=lambda a, b: TradingCalendar(source="rules"),
                   log=lambda m: None)
+    if last_screen:
+        s.save_state({"last_screen": last_screen})
     return env, s, clock, run
 
 
@@ -100,15 +103,16 @@ def test_pending_approval_does_not_halt_daily_but_defers_watch_and_screen(tmp_pa
     assert "bootstrap --asof 2026-11-20" in run.calls
 
 
-def test_first_start_waits_for_close_then_bootstraps(tmp_path):
+def test_first_start_waits_for_close(tmp_path):
     env, s, clock, run = _sched(tmp_path, "2026-10-16T10:00")   # 週五盤中
     assert s.once() == []                                          # 收盤前、前一交易日早於啟動日 → 不補
     assert s.load_state()["start_date"] == "2026-10-16"
     clock.set("2026-10-16T17:31")
     s.once()
-    assert run.calls == ["daily --date 2026-10-16", "review --scope watch --asof 2026-10-16", "bootstrap --asof 2026-10-16"]
+    assert run.calls == ["fetch --asof 2026-10-16 --freeze-pe",          # 當月凍結（沒有初選可順便凍結）
+                         "daily --date 2026-10-16", "review --scope watch --asof 2026-10-16"]   # 08-20 已初選
     st = s.load_state()
-    assert st["last_screen"] == st["last_watch_review"] == "2026-10-16"
+    assert st["last_screen"] == "2026-08-20" and st["last_watch_review"] == "2026-10-16"
     assert s.once() == []                                          # 同一天不重做
 
 
@@ -143,8 +147,8 @@ def test_no_end_date(tmp_path):
 def test_retry_then_give_up_records_anomaly(tmp_path):
     env, s, clock, run = _sched(tmp_path, "2026-10-16T18:00", fail={"review"})
     s.once()
-    assert s.load_state()["failures"]["watch:2026-10-16"] == 1
-    assert "bootstrap --asof 2026-10-16" in run.calls             # 其他工作照做
+    assert s.load_state()["failures"]["watch:init"] == 1          # 鍵＝上次檢查日（首次 init），不隨日期換
+    assert "daily --date 2026-10-16" in run.calls                 # 其他工作照做
     n = len(run.calls)
     s.once()
     assert len(run.calls) == n                                    # 30 分鐘內不重試
@@ -152,7 +156,8 @@ def test_retry_then_give_up_records_anomaly(tmp_path):
         clock.set(f"2026-10-16T{19 + k}:00")
         s.once()
     st = s.load_state()
-    assert "watch:2026-10-16" in st["gave_up"]
+    assert "watch:init" not in st.get("gave_up", [])               # D81：觀察名單檢查不永久放棄
+    assert st["retry_at"]["watch:init"] > 0                        # 改成下一個觀察週期再試
     a = env.conn.execute("SELECT kind, pause_trading FROM anomalies").fetchall()
     assert [tuple(r) for r in a] == [("scheduler_task_failed", 0)]
 
@@ -194,7 +199,7 @@ def test_bootstrap_screen_then_analyze(tmp_path, monkeypatch):
     from trader.pipelines import bootstrap as B
     env = make_env(tmp_path, {})
     seen = {}
-    monkeypatch.setattr(B, "run_screen", lambda cfg, paths, conn, asof, top, kind, clients: {
+    monkeypatch.setattr(B, "run_screen", lambda cfg, paths, conn, asof, top, kind, clients, dry_run=False: {
         "run_id": f"screen-{asof}", "shortlist": ["AAA", "BBB"], "to_analyze": [{"ticker": "AAA"}], "skipped_recent": [{"ticker": "BBB"}]})
     monkeypatch.setattr(B, "run_analyze", lambda cfg, paths, conn, asof, tickers, screen_asof, clients, router:
                         seen.setdefault("a", (tickers, screen_asof)) and {"engine": {"failed": 0}})

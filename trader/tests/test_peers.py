@@ -62,11 +62,14 @@ class FakePeerSec:
     def cik_for(self, t):
         return self.cik.get(t)
 
-    def submissions(self, cik):
+    def submissions(self, cik, max_age_hours=None, asof=None):   # 同真實 SecClient.submissions 介面（A3-M4C-02 起 peers 傳 max_age_hours）
         return {"sic": self.sic[cik]}
 
     def companyfacts(self, cik):
         return self.facts[cik]
+
+    def merged_companyfacts(self, cik):   # 真實 SecClient 會併入前身 CIK（M4-D2-12）；假物件無前身
+        return self.companyfacts(cik)
 
     def company_titles(self):
         return {"SELF": "SELF CO", "HD": "HOME DEPOT, INC.", "A": "ALPHA STORES", "B": "BETA MART",

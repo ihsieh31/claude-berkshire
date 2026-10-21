@@ -52,7 +52,7 @@
 
 把六項等權平均後，在通過排除的股票中取前 30 名：3 年超額報酬前段約 +1%、後段約 +5%；但在「每個時點只用當時已知資料」的逐期模擬裡，超額報酬約 +2.6%／3 年且統計上不顯著。**結論：排名可以拿來決定研究順序，不能當成買進理由。**
 
-金融股（`is_financial` 為真，或沒有產業標記時負債占資產 > 80%）改用三項：股數變化（少者佳）、ROE、ROA。各組先算組內百分位並平均，最後在組內**再排一次百分位**，兩組才能公平競爭名單。
+金融股（研究原型：`is_financial` 為真，或沒有產業標記時負債占資產 > 80%；`scripts/screen.py` 實際規則：SIC 6000–6799，無 SIC 時才近似且須同時負債占資產 > 80%、權益為正、ROA < 3%，REIT（SIC 6798）一律歸非金融，決策 D20）改用三項：股數變化（少者佳）、ROE、ROA。各組先算組內百分位並平均，最後在組內**再排一次百分位**，兩組才能公平競爭名單。
 
 #### 金融股計分（2026-10-11 修訂）
 
@@ -130,6 +130,8 @@ N = 10、20 時方向一致（採用方案優於舊版：N = 10 為 +6.5% 對 +2
 
 ## 五、輸入格式
 
+> **研究原型**：本節是實證研究時原型程式的輸入格式，**不是** `scripts/screen.py` 的介面。現行腳本的輸入見 `scripts/screen.py` 開頭說明與 `data_sources.md`（`fetch_edgar.py` 的 features.csv＋`fetch_prices.py` 的 prices.csv）。
+
 **原始資料模式**（`--fundamentals annual.csv --prices monthly.csv --asof 日期`）
 - `annual.csv`：每列一家公司一個財年。必要欄：`ticker, fiscal_year, period_end, revenue, net_income, operating_income, operating_cash_flow, capex, total_assets, total_liabilities, shareholders_equity, total_debt, eps, shares_outstanding`；選填：`name, sector, is_financial`。至少 5–10 個年度。
 - `monthly.csv`：`ticker, date, close`，選填 `total_return_index`（含息報酬指數，用於波動）、`market_cap`（若提供則直接使用；否則以收盤價 × 最新股數估算，兩者的拆股基準必須一致）。至少 37 個月。
@@ -155,9 +157,11 @@ N = 10、20 時方向一致（採用方案優於舊版：N = 10 為 +6.5% 對 +2
 
 ## 七、限制（使用前要知道）
 
+> 本節描述研究原型與其資料；現行規則以 `scripts/screen.py` 為準。
+
 - 證據來自美國大型股（S&P 500）。中小型股、其他市場的效果可能不同；百分位門檻會自動適應名單本身，但沒有在其他市場驗證過。
 - 早期財報為自動解析，含少量單位與拆股基準誤差；已做清理，但個別數字可能偏差。
-- 沒有產業分類資料；金融股以負債占資產比近似判定，可用 `is_financial` 欄位覆寫。
+- （研究原型）沒有產業分類資料；金融股以負債占資產比近似判定，可用 `is_financial` 欄位覆寫。現行 `scripts/screen.py` 用 SEC 的 SIC 判定（6000–6799，REIT 6798 歸非金融），無 SIC 時才近似（負債占資產 > 80%、權益為正、ROA < 3%）。
 - 報酬面證據不顯著；不要為了讓回測更好看而調整門檻或加特徵——這正是本檔要避免的資料探勘。
 
 

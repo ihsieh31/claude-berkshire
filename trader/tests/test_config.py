@@ -65,7 +65,7 @@ def test_load_minimal_valid_applies_defaults(isolated):
     assert cfg.data.alpaca_feed == "iex"
     assert cfg.dashboard.port == 8787
     assert cfg.schedule["daily_close"] == "17:30"
-    assert cfg.schedule["quarterly_screen"] == ["02-20", "05-20", "08-20", "11-20"]
+    assert cfg.schedule["quarterly_screen"] == ["03-20", "05-20", "08-20", "11-20"]   # D63／P38：2 月那次改 03-20
     assert set(cfg.models) == {"strong", "medium", "weak"}
     assert isinstance(cfg.models["medium"], TierConfig)
     assert cfg.models["medium"].name == "medium"

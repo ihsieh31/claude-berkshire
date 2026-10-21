@@ -19,6 +19,7 @@ from trader.llm.base import (
     materialize_files,
     write_raw,
 )
+from trader.jobs import isolation
 from trader.llm.claude_code import ClaudeCodeRunner
 from trader.llm.fake import FakeRunner
 from trader.llm.openai_compat import OpenAICompatRunner
@@ -119,12 +120,18 @@ def _ok() -> LLMResult:
 
 
 def test_retry_transport_error_then_success(tmp_path):
+    # D47：逾時最多重試 1 次（退避 base_delay）；非額度類的其他傳輸錯誤不重試
+    from trader.llm.base import LLMTimeout
     sleeps: list[float] = []
-    runner = ScriptedRunner([TransportError("斷線"), TransportError("斷線"), _ok()])
+    runner = ScriptedRunner([LLMTimeout("逾時"), _ok()])
     res = call_with_retry(runner, make_job(tmp_path, sandbox=False), retries=3, base_delay=1.5, sleep=sleeps.append)
     assert res.text == "{}"
-    assert runner.calls == 3
-    assert sleeps == [1.5, 3.0]  # 指數退避
+    assert runner.calls == 2
+    assert sleeps == [1.5]
+    runner = ScriptedRunner([TransportError("斷線"), _ok()])
+    with pytest.raises(TransportError):
+        call_with_retry(runner, make_job(tmp_path, sandbox=False), retries=3, base_delay=1.5, sleep=sleeps.append)
+    assert runner.calls == 1
 
 
 def test_quota_errors_back_off_longer(tmp_path):
@@ -152,8 +159,8 @@ def test_fatal_error_is_not_retried(tmp_path):
 
 def test_transport_error_raised_after_exhaustion(tmp_path):
     sleeps: list[float] = []
-    runner = ScriptedRunner([TransportError("a"), TransportError("b"), TransportError("c")])
-    with pytest.raises(TransportError):
+    runner = ScriptedRunner([TransportError("rate limit a"), TransportError("rate limit b"), TransportError("rate limit c")])
+    with pytest.raises(TransportError):   # 額度類錯誤才會用完 retries（D47）
         call_with_retry(runner, make_job(tmp_path, sandbox=False), retries=2, sleep=sleeps.append)
     assert runner.calls == 3
     assert len(sleeps) == 2
@@ -255,7 +262,7 @@ CC_EXPECTED_CMD = [
     "--setting-sources", "project,local",
     "--strict-mcp-config",
     "--no-session-persistence",
-    "--settings", '{"permissions": {"deny": []}}',
+    "--settings", isolation.settings_json([]),  # 無封鎖目錄：只剩 disableAllHooks 與設定檔寫入禁止
 ]
 
 
@@ -304,6 +311,7 @@ def test_claude_command_and_stdin_and_cwd(tmp_path):
     assert fake.kwargs["timeout"] == 123
     assert fake.kwargs["capture_output"] is True
     assert fake.kwargs["text"] is True
+    assert isinstance(fake.kwargs["env"], dict)  # 子程序環境有明確傳入（已去除秘密變數）
 
 
 def test_claude_parses_usage_with_cache_and_cost(tmp_path):

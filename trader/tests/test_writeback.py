@@ -160,7 +160,7 @@ def test_thesis_written_and_frozen_with_addendum(env, tmp_path):
     ("NO_ACTION", "MISSING_DATA", "MISSING_DATA"),
     ("NO_ACTION", "TOO_HARD", "TOO_HARD"),
     ("NO_ACTION", "REJECT", "REJECT"),
-    ("NO_ACTION", "RED_LIGHT", "REJECT"),
+    ("NO_ACTION", "RED_LIGHT", "WATCH"),   # M2_D7_08：紅燈＝延後，留觀察名單（P53）
     ("NO_ACTION", "NOT_THIS_SKILL", "NO_ACTION"),
 ])
 def test_registry_status_mapping(env, tmp_path, signal, reason, status):
@@ -382,6 +382,8 @@ def test_full_result_framework_fills_skill_hashes_and_fy_last_filed(env, tmp_pat
     conn, paths = env
     d = _tdir(tmp_path)
     (d / "sec").mkdir()
+    (d / "dossier").mkdir(parents=True, exist_ok=True)
+    (d / "dossier" / ".prep_done").write_text("ok\n", encoding="utf-8")  # 前置完成標記
     (d / "sec" / "_index.json").write_text(json.dumps([
         {"form": "10-K", "filingDate": "2025-02-20"}, {"form": "10-K", "filingDate": "2026-02-19"},
         {"form": "10-Q", "filingDate": "2026-07-30"}]), encoding="utf-8")
@@ -390,3 +392,10 @@ def test_full_result_framework_fills_skill_hashes_and_fy_last_filed(env, tmp_pat
     assert log["fy_last_filed"] == "2026-02-19"
     assert (paths.state / log["skill_hashes"]).is_file()
     assert writeback.skill_hashes_file(paths) == log["skill_hashes"]   # 內容不變 → 同一檔
+
+
+# 自 test_hark_queue.py 移來（框架測試，與 hark_queue 無關；P34／M8-D10-01）
+def test_stop_one_liner_joins_continuation(tmp_path):
+    from trader.analysis.writeback import _stop_one_liner
+    (tmp_path / "report_A.md").write_text("結論：觀察\n一句話理由：甲乙丙，\n            丁戊己。\n停在哪一關：步 0\n", encoding="utf-8")
+    assert _stop_one_liner({}, tmp_path) == "甲乙丙， 丁戊己。"

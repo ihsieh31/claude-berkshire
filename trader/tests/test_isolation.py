@@ -28,9 +28,11 @@ def test_sandbox_under_denied_root_rejected(tmp_path):
 
 
 def test_settings_json_rules():
-    rules = json.loads(iso.settings_json([Path("/Users/someone"), Path("/private")]))["permissions"]["deny"]
+    s = json.loads(iso.settings_json([Path("/Users/someone"), Path("/private")]))
+    rules = s["permissions"]["deny"]
     assert "Read(//Users/someone/**)" in rules and "Write(//private/**)" in rules and "Edit(//private/**)" in rules
-    assert len(rules) == 6
+    assert len([r for r in rules if "(//**/" not in r]) == 6  # 2 個封鎖目錄 × Read／Edit／Write（設定檔規則另計）
+    assert s["disableAllHooks"] is True
 
 
 def test_runner_command_has_settings_and_refuses_bad_sandbox(tmp_path):

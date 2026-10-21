@@ -5,8 +5,11 @@
 - PROC-071 第 4、7 步：讀至少一家主要競爭者年報、用同口徑比較；以公開第三方資料完成競爭問題並附出處。
 
 做法（不做判斷，只準備資料）：
-- 同業母體＝股票池（S&P 500 快取）。SIC 取自 SEC submissions；財報取自 companyfacts，時點規則沿用 skill 的 fetch_edgar.annual_series。
-  股票池內同 SIC 前兩碼不足 SHOCK_TARGET 家時，以 SEC 公司搜尋（本公司與池內同業的 SIC 四碼）補衝擊年樣本。
+- 同業母體＝股票池（呼叫端以決策日當時的 S&P 500 成分股版本提供，來源寫進段落；D39）。同一 CIK 的多類股代號只算一家
+  （保留名單中第一個代號；與本公司同 CIK 者不算同業）。SIC 取自 SEC submissions；財報取自併入前身 CIK 的 companyfacts
+  （SecClient.merged_companyfacts，與資料包其他表同口徑），時點規則沿用 skill 的 fetch_edgar.annual_series。
+  股票池內同 SIC 前兩碼不足 SHOCK_TARGET 家時，以 SEC 公司搜尋（本公司 SIC 四碼優先，再池內同業的四碼；同一四碼內依 CIK）
+  補衝擊年樣本。GICS 是現行分類（無歷史版本）；母體是存活者，段落寫明偏差方向。
 - 可比同業＝股票池內同 GICS 子產業（缺 GICS 時用同 SIC 四碼），依營收取前 5 家。
 - 主要競爭者＝本公司最新 10-K 業務段「競爭」文字中點名的公司（名稱比對，大寫開頭才算）：先比股票池；
   池外的 SEC 申報公司也比，但名稱（只去法律形式字）須至少兩個字、且 SIC 大類與本公司相同（製造業 20–39、運輸 40–49 等；降低誤認），
@@ -21,7 +24,9 @@ from typing import Any
 
 import pandas as pd
 
-from .dossier_prep import _fetch_edgar_module, drop_price_sections, scrub_price_text, split_10k_items
+from trader.data.http import SecBlocked
+
+from .dossier_prep import _fetch_edgar_module, external_header, sanitize_filing_text, split_10k_items
 
 MIN_SHOCK_PEERS = 5
 SHOCK_TARGET = 8          # 股票池同 SIC 前兩碼少於此數 → 以 SEC 同 SIC 四碼公司補樣本（每年需 ≥5 家有效）
@@ -31,6 +36,7 @@ MAX_COMPETITORS = 2
 MAX_SIC4_PEERS = 5
 NARROW_GICS = 5   # 推論：S&P 500 內 ≤5 家的 GICS 子產業多為直接競爭組（建商、家用品、飲料、管理式醫療…）
 PEER_ITEM_CHARS = 30_000
+SIC_MAX_AGE_HOURS = 24 * 30   # A3-M4C-02：同業只取 submissions 的 SIC（幾乎不變），不必每個新決策日重抓約 500 家
 
 _SUFFIX = re.compile(r"\b(the|inc|incorporated|corp|corporation|co|company|companies|holdings?|group|plc|ltd|limited|"
                      r"n\.?v|s\.?a|ag|se|lp|llc|trust|international|worldwide|global)\b\.?", re.IGNORECASE)
@@ -116,9 +122,12 @@ def _series(F, facts: dict, asof: str) -> pd.DataFrame:
 
 
 def roe_series(df: pd.DataFrame) -> pd.Series:
-    """ROE＝淨利 ÷ 期初期末平均權益；平均權益 ≤0 → 不計（無經濟意義）。"""
-    eq = df["equity"]
-    avg = (eq + eq.shift(1)) / 2
+    """ROE＝淨利 ÷ 期初期末平均權益；期初或期末權益 ≤0 → 不計（與資料包 10 年表 build_dossier 同式，M2-D5-06／A3-M4A-04）。
+    先補成連續年度再 shift：缺年時期初權益是缺，不得拿相隔兩年的權益（M4-D1-13）。"""
+    if len(df.index):
+        df = df.reindex(range(int(min(df.index)), int(max(df.index)) + 1))
+    pos_eq = df["equity"].where(df["equity"] > 0)
+    avg = (pos_eq + pos_eq.shift(1)) / 2
     r = df["net_income"] / avg
     return r.where(avg > 0)
 
@@ -157,7 +166,7 @@ def _metrics(df: pd.DataFrame, last: int) -> dict[str, Any]:
     margin = (d5["operating_income"] / d5["revenue"]).dropna()
     roe = roe_series(df.reindex(range(last - 5, last + 1))).reindex(yrs5).dropna()
     rev = df["revenue"].dropna()
-    rev_last = rev.get(last) if last in rev.index else (rev.iloc[-1] if not rev.empty else float("nan"))
+    rev_last = rev.get(last) if last in rev.index else float("nan")   # A3-M4A-03：last 年缺 → 缺，不退用舊年（年度錯位）
     r0 = rev.get(last - 5)
     cagr = (rev_last / r0) ** (1 / 5) - 1 if pd.notna(r0) and r0 and r0 > 0 and pd.notna(rev_last) else float("nan")
     return {"fy": last, "revenue": rev_last, "rev_cagr5": cagr,
@@ -173,6 +182,27 @@ def _m(v: float) -> str:
     return "缺" if v is None or pd.isna(v) else f"{v / 1e6:,.0f}"
 
 
+def universe_note(src: str | None) -> str:
+    """D39：段落寫明股票池時點來源、GICS 為現行分類與存活者偏差。src 為 data.universe.load_universe 的來源字串。"""
+    s = str(src or "")
+    if s.startswith("version:"):
+        when = f"決策日當時的成分股版本（{s[len('version:'):]} 記錄的名單）"
+    elif s == "override":   # A3-M4B-02
+        when = "使用者指定名單（覆寫檔；非指數成分股紀錄）"
+    elif s.endswith("_not_pit"):
+        when = "現行名單（沒有決策日以前的成分股版本；可能含決策日之後才納入者）"
+        if s.startswith("cache_stale"):
+            when += "；且下載失敗沿用舊快取"
+    elif s == "cache_stale":
+        when = "下載失敗沿用的舊快取名單（可能缺最近的成分股異動）"
+    elif s:
+        when = f"決策日（近日）抓取的名單（{s}）"
+    else:
+        when = "來源未記錄"
+    return (f"股票池＝{when}；GICS 子產業用的是現行分類（無歷史版本）；股票池只含決策日仍在指數內的公司（存活者），"
+            "過去年度表現差而被剔除或下市者不在股票池樣本，同業中位偏高、衝擊年可能少判（SEC 補充樣本含已下市者）。")
+
+
 def load_gics(csv_path: Path) -> dict[str, str]:
     """股票池 CSV 的 GICS 子產業（代號 → 子產業）；檔案或欄位缺 → 空 dict。"""
     try:
@@ -186,40 +216,50 @@ def load_gics(csv_path: Path) -> dict[str, str]:
 
 
 def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str], tenk_text: str | None,
-                       outdir: Path, gics: dict[str, str] | None = None) -> dict[str, Any]:
+                       outdir: Path, gics: dict[str, str] | None = None,
+                       universe_source: str | None = None) -> dict[str, Any]:
     """產生同業段落（markdown）與主要競爭者 10-K 節錄檔（寫到 outdir，檔名 peer_{T}_10-K_{日期}.txt）。
+    段落只回傳、不寫進資料包（D37：由 dossier_prep.assemble 統一插入）。
 
-    回傳 {"markdown", "competitors", "sic", "shock_years", "peer_files"}。任何單一同業資料缺失只略過該家。
+    回傳 {"markdown", "competitors", "sic", "shock_years", "peer_files", "missing"}。任何單一同業資料缺失只略過該家，
+    競爭者節錄抓取失敗寫進 missing 與段落（「缺：原因」，M4-D5-09）。
     """
     F = _fetch_edgar_module()
     T = ticker.strip().upper().replace("-", ".")
     sic = str((sec.submissions(cik) or {}).get("sic") or "")
-    own = _series(F, sec.companyfacts(cik), asof)
+    own = _series(F, sec.merged_companyfacts(cik), asof)
+    blocked = [0]   # A3-M4E-01：SEC 封鎖而略過的家數（母體縮水要留痕）
     last = int(own["net_income"].dropna().index.max()) if not own["net_income"].dropna().empty else None
     years = list(range(last - 9, last + 1)) if last else []
 
     # 股票池的 SIC 與 CIK（submissions 快取）
     pool: dict[str, tuple[str, str]] = {}
+    pool_ciks = {str(cik).zfill(10)}   # 同一 CIK 只占一席（GOOG／GOOGL；M4-D1-14），本公司的其他類股也不算同業
     for tk in universe:
         tk = tk.strip().upper().replace("-", ".")
         if tk == T:
             continue
         c = sec.cik_for(tk)
-        if not c:
+        if not c or str(c).zfill(10) in pool_ciks:
             continue
         try:
-            s = str((sec.submissions(c) or {}).get("sic") or "")
+            s = str((sec.submissions(c, max_age_hours=SIC_MAX_AGE_HOURS) or {}).get("sic") or "")
+        except SecBlocked:
+            blocked[0] += 1
+            continue
         except Exception:  # noqa: BLE001
             continue
         pool[tk] = (c, s)
+        pool_ciks.add(str(c).zfill(10))
 
     facts_cache: dict[str, pd.DataFrame] = {}
 
     def frame(tk: str) -> pd.DataFrame | None:
         if tk not in facts_cache:
             try:
-                facts_cache[tk] = _series(F, sec.companyfacts(pool[tk][0]), asof)
-            except Exception:  # noqa: BLE001
+                facts_cache[tk] = _series(F, sec.merged_companyfacts(pool[tk][0]), asof)
+            except Exception as e:  # noqa: BLE001
+                blocked[0] += isinstance(e, SecBlocked)
                 facts_cache[tk] = None
         return facts_cache[tk]
 
@@ -236,24 +276,32 @@ def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str
     if years and sic2 and n_pool_shock < SHOCK_TARGET:
         # 本公司 SIC 四碼最先（最接近的同業），其次股票池內同前兩碼者的四碼
         codes = [sic] + sorted({s for _, s in pool.values() if s[:2] == sic2} - {sic, ""})
-        seen = {c for c, _ in pool.values()} | {str(cik).zfill(10)}
+        seen = {str(c).zfill(10) for c, _ in pool.values()} | {str(cik).zfill(10)}
+        # 池內各公司與本公司的前身 CIK 也排除：其歷史已經 merged_companyfacts 併入，否則同一公司重複計入（P41R）
+        pred = getattr(sec, "predecessors", None)
+        if pred is not None:
+            seen |= {str(p).zfill(10) for c in list(seen) for p in pred(c)}
         cands: list[str] = []
         for code in codes:
             try:
-                cands += [c for c in sec.sic_companies(code) if c not in seen and c not in cands]
-            except Exception:  # noqa: BLE001  SEC 搜尋失敗：只用股票池
+                # 同一四碼內依 CIK 排序（SEC 名單是字母序，取前段會偏向名稱靠前者；M4-D9-04）
+                cands += [c for c in sorted(sec.sic_companies(code)) if str(c).zfill(10) not in seen and c not in cands]
+            except Exception as e:  # noqa: BLE001  SEC 搜尋失敗：只用股票池
+                blocked[0] += isinstance(e, SecBlocked)
                 continue
         for c in cands[:MAX_SHOCK_EXTRA]:
             try:
-                fc = sec.companyfacts(c)
+                fc = sec.merged_companyfacts(c)
                 r = roe_series(_series(F, fc, asof))
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
+                blocked[0] += isinstance(e, SecBlocked)
                 continue
             if r.reindex(years).notna().sum() >= 3:
                 peer_roe[f"CIK{c}"] = r
                 extra_shock += 1
                 extra_names.append(str(fc.get("entityName") or f"CIK{c}"))
     shock_df, shocks = shock_years(peer_roe, years) if years else (pd.DataFrame(), [])
+    undetermined = [int(r.year) for r in shock_df.itertuples() if r.flag == "樣本不足"] if not shock_df.empty else []
 
     # 2. 主要競爭者（10-K 點名）與同 SIC 四碼同業
     titles = sec.company_titles()
@@ -261,20 +309,20 @@ def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str
     named = named_competitors(comp_txt, titles, list(pool), T) if comp_txt else []
     outside: list[str] = []
     if comp_txt:
-        pool_ciks = {c for c, _ in pool.values()} | {str(cik).zfill(10)}
         others = [tk for tk in titles if tk not in pool and tk != T]
         for tk in named_competitors(comp_txt, titles, others, T, strict=True):
             c = sec.cik_for(tk)
-            if not c or c in pool_ciks:
+            if not c or str(c).zfill(10) in pool_ciks:
                 continue
             try:
-                s = str((sec.submissions(c) or {}).get("sic") or "")
-            except Exception:  # noqa: BLE001
+                s = str((sec.submissions(c, max_age_hours=SIC_MAX_AGE_HOURS) or {}).get("sic") or "")
+            except Exception as e:  # noqa: BLE001
+                blocked[0] += isinstance(e, SecBlocked)
                 continue
             if sic_division(s) is None or sic_division(s) != sic_division(sic):
                 continue   # 池外只收同 SIC 大類（擋掉 Freddie Mac 這類在融資段被提到的公司）
             pool[tk] = (c, s)
-            pool_ciks.add(c)
+            pool_ciks.add(str(c).zfill(10))
             outside.append(tk)
             if len(outside) >= MAX_OUTSIDE_COMPETITORS:
                 break
@@ -306,34 +354,41 @@ def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str
         if not df["net_income"].dropna().empty:
             table_rows.append((tk, group_label, _metrics(df, int(df["net_income"].dropna().index.max()))))
 
-    # 3. 主要競爭者最新 10-K 節錄（Item 1、7）：10-K 點名者優先；未點名但 GICS 子產業很窄（含本公司 ≤3 家）→ 同組即直接競爭者
-    narrow = [tk for tk, _ in sic4_rows] if g_self and len(sic4) + 1 <= NARROW_GICS else []
+    # 3. 主要競爭者最新 10-K 節錄（Item 1、7）：10-K 點名者優先；未點名但 GICS 子產業很窄（股票池內含本公司、含點名者
+    #    ≤NARROW_GICS 家）→ 同組即直接競爭者（A3-M4A-01：組大小含點名者，點名者不得讓大組看似很窄）
+    n_group = len([tk for tk in pool if gics.get(tk) == g_self]) + 1 if g_self else 0
+    narrow = [tk for tk, _ in sic4_rows] if g_self and n_group <= NARROW_GICS else []
     to_fetch = (named + [t for t in narrow if t not in named])[:MAX_COMPETITORS]
-    peer_files = []
+    peer_files, missing = [], []
     outdir = Path(outdir)
     for tk in to_fetch:
         try:
             fl = [f for f in sec.filings(pool[tk][0], asof, forms=["10-K"]) if f.get("url") and f["filingDate"] < asof]
             if not fl:
+                missing.append(f"缺：競爭者 {tk} 決策日前無 10-K")
                 continue
             f = sorted(fl, key=lambda r: r["filingDate"])[-1]
-            raw, _ = drop_price_sections(sec.filing_text(f["url"]))
-            text, _ = scrub_price_text(raw)
+            text, _ = sanitize_filing_text(sec.filing_text(f["url"]))   # procedure/08 §1：同業原文走同一清洗入口
             items = dict(split_10k_items(text))
-            parts = [f"## Item {k}\n{items[k][:PEER_ITEM_CHARS]}" for k in ("1", "7") if items.get(k)]
+            cut = "\n［框架截斷：超過字數上限］"
+            parts = [f"## Item {k}\n{items[k][:PEER_ITEM_CHARS]}" + (cut if len(items[k]) > PEER_ITEM_CHARS else "")
+                     for k in ("1", "7") if items.get(k)]
             if not parts:
-                parts = [text[:2 * PEER_ITEM_CHARS]]
+                parts = [text[:2 * PEER_ITEM_CHARS] + (cut if len(text) > 2 * PEER_ITEM_CHARS else "")]
             name = f"peer_{tk}_10-K_{f['filingDate']}.txt"
             outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / name).write_text(f"# 競爭者 {tk} 10-K {f['filingDate']} {f['url']}\n" + "\n\n".join(parts),
+            (outdir / name).write_text(f"# 競爭者 {tk} 10-K {f['filingDate']} {f['url']} "
+                                       + external_header("10-K", f["filingDate"]) + "\n" + "\n\n".join(parts),
                                        encoding="utf-8")
             peer_files.append(name)
-        except Exception:  # noqa: BLE001  單一競爭者抓取失敗只略過
+        except Exception as e:  # noqa: BLE001  單一競爭者抓取失敗只略過，照實標缺
+            missing.append(f"缺：競爭者 {tk} 10-K 節錄抓取失敗（{type(e).__name__}）")
             continue
 
     # markdown
-    L = ["", "## 同業資料（框架補算；SEC companyfacts／submissions，只用決策日前已申報者；股票池＝S&P 500）", ""]
+    L = ["", "## 同業資料（框架補算；SEC companyfacts／submissions，只用決策日前已申報者；股票池見母體說明）", ""]   # A3-M4B-02
     L.append(f"本公司 SIC：{sic or '缺'}；GICS 子產業：{g_self or '缺'}。")
+    L.append("母體說明（D39）：" + universe_note(universe_source))
     L += ["", "### 產業共同衝擊年（SKILL §3：SIC 前兩碼 ≥5 家；中位 ROE ≤0 或 < 前 5 年中位的一半）", ""]
     if shock_df.empty:
         L.append("缺：無法計算（本公司財報年度缺）。")
@@ -343,7 +398,18 @@ def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str
         L += ["", "| 年度 | 有效家數 | 同業中位 ROE | 前 5 年中位 | 判定 |", "|--:|--:|--:|--:|:--|"]
         for r in shock_df.itertuples():
             L.append(f"| {r.year} | {r.n} | {_pct(r.median_roe)} | {_pct(r.prev5_median)} | {r.flag} |")
-        L += ["", "產業共同衝擊年：" + ("、".join(str(y) for y in shocks) if shocks else "無")]
+        if shocks:
+            verdict = "、".join(str(y) for y in shocks)
+        elif len(undetermined) == len(shock_df):
+            verdict = "全部年度樣本不足，未判定"
+        elif undetermined:
+            verdict = "可判定的年度中無"
+        else:
+            verdict = "無"
+        L += ["", "產業共同衝擊年：" + verdict]
+        if undetermined:   # M4-D5-05：無法判定不等於判定沒有（procedure/08 §1 缺同業的處置）
+            L += ["", "FY" + "、".join(str(y) for y in undetermined) + " 同業樣本不足（有效家數 <5），無法判定是否為衝擊年；"
+                  "依 procedure/08 §1 不剔除這些年度，誠實標示寫「未剔除產業衝擊年（缺同業）」。"]
         if extra_shock:
             L += ["", "SEC 補充樣本：" + "、".join(extra_names) + "。"]
         if extra_shock and shocks:
@@ -357,13 +423,15 @@ def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str
         L.append("10-K 競爭段點名且在股票池內：" + "、".join(in_pool) + "。")
     if outside:
         L.append("10-K 競爭段點名、不在股票池但在 SEC 申報：" + "、".join(outside) + "（名稱比對，是否為同一家由分析確認）。")
-    if not named:
-        L.append("10-K 競爭段點名的公司都不在 SEC 申報名單（可能非美國上市或未上市）。")
+    if not named:   # A3-M4A-02：分辨「沒有競爭段可比」與「有段但點名者都不在 SEC 名單」
+        L.append("缺：本公司 10-K 未取得或無競爭段，未比對點名競爭者。" if not comp_txt else
+                 "10-K 競爭段點名的公司都不在 SEC 申報名單（可能非美國上市或未上市）。")
     if narrow:
-        L.append(f"GICS 子產業很窄（股票池內含本公司 {len(sic4) + 1} 家）：同組公司視為直接競爭者（推論），"
+        L.append(f"GICS 子產業很窄（股票池內含本公司 {n_group} 家）：同組公司視為直接競爭者（推論），"
                  f"附營收前 {MAX_COMPETITORS} 家的 10-K 節錄；是否真為競爭者由分析判斷。")
     elif not named:
-        L.append("同 GICS 子產業涵蓋多種業務，表中同業只作同口徑參考，不視為直接競爭者；主要競爭者年報缺，需以其他公開資料補。")
+        L.append(f"{'同 GICS 子產業' if g_self else '同 SIC ' + (sic or '缺') + ' 四碼'}涵蓋多種業務，表中同業只作同口徑參考，"
+                 "不視為直接競爭者；主要競爭者年報缺，需以其他公開資料補。")
     if len(table_rows) > 1:
         L += ["", "| 代號 | 來源 | 財年 | 營收 | 營收 5 年年複合 | 營業利益率 | ROE |", "|:--|:--|--:|--:|--:|--:|--:|"]
         for tk, src, m in table_rows:
@@ -371,6 +439,11 @@ def build_peer_section(sec, ticker: str, cik: str, asof: str, universe: list[str
                      f"{_pct(m['op_margin_med5'])} | {_pct(m['roe_med5'])} |")
     if peer_files:
         L += ["", "競爭者 10-K 節錄檔（DOSSIER 工作摘要）：" + "、".join(f"`sec/{n}`" for n in peer_files)]
+    if blocked[0]:   # A3-M4E-01：呼叫端把 missing 併入資料狀態
+        missing.append(f"缺：同業母體因 SEC 封鎖縮水 {blocked[0]} 家")
+    if missing:
+        L += [""] + [f"- {m}" for m in missing]
     return {"markdown": "\n".join(L) + "\n", "competitors": named, "outside_competitors": outside,
             "shock_sample": {"pool": n_pool_shock, "sec_extra": extra_shock, "sec_extra_names": extra_names}, "narrow_gics_peers": narrow, "sic": sic, "shock_years": shocks,
-            "peer_files": peer_files}
+            "shock_undetermined": undetermined,
+            "peer_files": peer_files, "missing": missing, "universe_source": universe_source}

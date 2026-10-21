@@ -77,6 +77,8 @@ def scheduler_plist(paths: Paths, config_path: Path | None) -> dict:
 
 
 def _launchctl(*args: str) -> subprocess.CompletedProcess:
+    if shutil.which("launchctl") is None:   # Linux 等非 macOS：沒有 launchd，回失敗而不是例外（M8-D1-07）
+        return subprocess.CompletedProcess(["launchctl", *args], 127, "", "此系統沒有 launchctl（非 macOS；排程請用 scheduler print --cron）")
     return subprocess.run(["launchctl", *args], capture_output=True, text=True)
 
 
@@ -88,14 +90,19 @@ def build_widget() -> Path:
 
 
 def install(paths: Paths, port: int, config_path: Path | None, widget: bool = True) -> list[str]:
-    """寫 plist 到 ~/Library/LaunchAgents 並載入（已載入者先卸載再載入）。回傳完成的 label。"""
+    """寫 plist 到 ~/Library/LaunchAgents 並載入（已載入者先卸載再載入）。回傳完成的 label。
+    先載入伺服器；小儀表板編譯失敗只印警告到 stderr（伺服器照常載入，A3-M8C2-14）。"""
     AGENTS.mkdir(parents=True, exist_ok=True)
     (paths.state / "logs").mkdir(parents=True, exist_ok=True)
-    plists = [(LABEL_SERVER, server_plist(paths, port, config_path))]
+    done = _load([(LABEL_SERVER, server_plist(paths, port, config_path))])
     if widget:
-        build_widget()
-        plists.append((LABEL_WIDGET, widget_plist(paths, port)))
-    return _load(plists)
+        try:
+            build_widget()
+        except RuntimeError as e:
+            print(f"[WARN] {e}\n伺服器已載入；小儀表板未安裝（修好後重跑，或加 --no-widget 略過）", file=sys.stderr)
+            return done
+        done += _load([(LABEL_WIDGET, widget_plist(paths, port))])
+    return done
 
 
 def _load(plists: list[tuple[str, dict]]) -> list[str]:

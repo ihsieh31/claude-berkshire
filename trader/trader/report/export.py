@@ -10,8 +10,12 @@ from typing import Any
 from . import metrics as M
 
 DATASETS = ("holdings", "orders", "fills", "cash", "corporate_actions", "analyses", "nav", "usage", "approvals",
-            "anomalies")
+            "anomalies", "registry")
+SCHEMA_VERSION = 2   # 匯出格式版本：2＝anomalies 含已結案列、加 registry 與 meta（M8-D5-02、M8-D5-08）
 FORMATS = ("csv", "json", "xlsx")
+# 資料集說明（寫進 all.json／xlsx 的 meta）：名稱與內容不直覺的才列（A3-M8C2-09）
+NOTES = {"registry": "登錄表非持股列（觀察名單與排除名單）；持股見 holdings",
+         "analyses": "未作廢的決策；provenance＝來源（NULL＝本機原生，他機匯入由 hark/export.sh 填）"}
 
 
 def _flat(v: Any) -> Any:
@@ -36,7 +40,17 @@ def dataset(conn, name: str) -> list[dict]:
         return M.usage(conn)
     if name == "approvals":
         return [dict(r) for r in conn.execute("SELECT * FROM approvals ORDER BY approval_id")]
-    return M.anomalies(conn)["open"]
+    if name == "registry":   # 非持股（觀察／排除名單）；持股在 holdings（A3-M8C2-09）
+        return M.watchlist(conn)
+    # 全部異常（含已結案與 manual_adjust 稽核列；status／resolved_at／resolution 照表，M8-D5-08）
+    return [{**dict(r), "hint": M.anomaly_hint(dict(r))} for r in conn.execute("SELECT * FROM anomalies ORDER BY anomaly_id")]
+
+
+def meta(conn) -> dict:
+    """all.json／xlsx 的 meta：匯出時間、淨值資料日、格式版本、資料集說明。"""
+    from .. import db
+    nav = conn.execute("SELECT MAX(date) FROM nav_daily").fetchone()[0]
+    return {"exported_at": db.now_iso(), "nav_as_of": nav, "schema_version": SCHEMA_VERSION, "notes": NOTES}
 
 
 def _columns(rows: list[dict]) -> list[str]:
@@ -58,16 +72,27 @@ def to_csv(rows: list[dict]) -> str:
     return "﻿" + buf.getvalue()  # BOM：Excel 開中文不亂碼
 
 
+def _xlsx_cell(v: Any) -> Any:
+    """字串去掉 xlsx 不容許的控制字元（否則整份匯出 500）；數字等照原樣（A3-M8E-05）。"""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    v = _flat(v)
+    return ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v
+
+
 def to_xlsx(data: dict[str, list[dict]]) -> bytes:
+    """每個資料集一張工作表。以 = 開頭的字串存成文字、不當公式（模型理由等外來文字，A3-M8E-05）。"""
     from openpyxl import Workbook
     wb = Workbook()
     wb.remove(wb.active)
     for name, rows in data.items():
         ws = wb.create_sheet(name[:31])
         cols = _columns(rows)
-        ws.append(cols)
+        ws.append([_xlsx_cell(k) for k in cols])
         for r in rows:
-            ws.append([_flat(r.get(k)) for k in cols])
+            ws.append([_xlsx_cell(r.get(k)) for k in cols])
+            for c in ws[ws.max_row]:
+                if c.data_type == "f":
+                    c.data_type = "s"
         ws.freeze_panes = "A2"
     buf = io.BytesIO()
     wb.save(buf)
@@ -83,6 +108,8 @@ def export(conn, names: list[str], fmt: str, out_dir: Path, stamp: str) -> list[
     if fmt not in FORMATS:
         raise ValueError(f"格式須為 {'、'.join(FORMATS)}")
     data = {n: dataset(conn, n) for n in names}
+    if fmt != "csv":
+        data = {"meta": [meta(conn)], **data}
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     if fmt == "csv":

@@ -30,7 +30,8 @@ def env(tmp_path, state_dir):
     F, P = _skill_make()
     F.to_csv(inputs / "features.csv", index=False)
     P.to_csv(inputs / "prices.csv", index=False)
-    yield paths, conn, inputs
+    (inputs / "universe.txt").write_text("# source=test\n" + "\n".join(F["ticker"]) + "\n", encoding="utf-8")
+    yield paths, conn, inputs   # 有 universe.txt：股票池來源已知，不觸發 M1-R6-04 警告
     conn.close()
 
 
@@ -83,7 +84,7 @@ def test_registry_x5_backfills_and_recent_skipped(env):
     rejected, recent = first[0], first[1]
     _reg(conn, rejected, status="REJECT", last_full_review_date="2026-08-01")
     _reg(conn, recent, status="WATCH", last_full_review_date="2026-08-01")
-    s = SP.run_screen(None, paths, conn, ASOF, inputs_dir=inputs)          # 同一 run_id 重跑
+    s = SP.run_screen(None, paths, conn, ASOF, inputs_dir=inputs, force=True)  # 同一 run_id 重跑須 force（M1-D9-01）
     assert rejected not in s["shortlist"] and len(s["shortlist"]) == 15     # X5 排除後自動遞補
     assert s["exclusions"]["excl_recent_reject"] == 1
     assert recent in s["shortlist"]

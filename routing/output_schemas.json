@@ -4,7 +4,7 @@
   "ticker": "代號",
   "decision_date": "YYYY-MM-DD",
   "sections_appended": [
-   "業務 | 分部 | 風險因素 | 管理層討論 | 債務到期表 | 利息費用 | 或有負債與訴訟 | 會計師關鍵查核事項 | 委託書薪酬 | 重大 8-K | 最近一季 10-Q | 附註摘要 | 競爭與產業關鍵指標"
+   "已追加的段落名稱（自由文字，例如 業務、附註摘要、會計師關鍵查核事項、產業補充序列…；框架只記錄不判讀）"
   ],
   "dq_checks": [
    {
@@ -13,9 +13,8 @@
    }
   ],
   "missing": [
-   "缺的必要項（依 procedure/08 表）"
-  ],
-  "contains_price": false
+   "缺的必要項（依 procedure/08 表）。保險（資料包有「歷年 10-K（保險業多年補充）」段）算不出 P-58 浮存金成本（Σ 稅前承保損失 ÷ Σ 平均浮存金，10 年窗、至少 5 個會計年度）時，該項以「P-58」開頭；銀行算不出 P-60 壓力測試（撥備前稅前盈餘、平均放款、權益÷資產）時以「P-60」開頭。框架見到這兩種開頭即停在 STEP0 MISSING_DATA、不進 FULL_A（設計決策 D20）；P-59 綜合率缺照常列，不以 P-58 開頭"
+  ]
  },
  "TRIAGE": {
   "ticker": "代號",
@@ -31,22 +30,27 @@
  },
  "PRICE": {
   "ticker": "代號",
-  "price": 0.0,
+  "_price": "選填鍵 price（數字或 null，可省略）：框架以決策日收盤覆寫，不採用本欄（A3-M3B-03）",
   "auto_buy_cap": "數字或 null（照抄 cap_calc）",
   "sell_review_above": "數字或 null",
   "absurd_price_line": "數字或 null",
   "gates": {
-   "gate1_screen": "通過 | 不通過",
-   "gate2_price_lt_cap": "通過 | 不通過 | 無上限",
-   "gate3_on_file": "通過 | 不通過 | 已過期"
+   "_說明": "三閘門由框架以 cap_calc 與決策日誌重算並覆寫；本節只供紀錄，值寫 通過／不通過／無上限／已過期 或 null",
+   "gate1_screen": "字串或 null（框架重算）",
+   "gate2_price_lt_cap": "字串或 null（框架重算）",
+   "gate3_on_file": "字串或 null（框架重算）"
   },
-  "proposed_action": "BUY_CANDIDATE | HOLD | SELL_REVIEW | SELL_HALF | NO_CHANGE",
+  "_proposed_action": "選填：proposed_action＝BUY_CANDIDATE | HOLD | SELL_REVIEW | SELL_HALF | NO_CHANGE，只記日誌、框架不採信；動作一律由框架依 cap_calc、三閘門與賣出規則算出（設計決策 D28），任何賣出只交 HOLD_REVIEW（D03）",
   "needs_full": "true | false",
+  "g9_contrarian": "一到兩句：G9 反方最強論點的簡答（以本次 cap_calc 數字為準；P-63 不得跳過）",
+  "g10_still_valid": "true | false（G10 三件——一句話理由、保守價值區間、失效條件——以本次數字看是否仍成立；任一不成立填 false，框架交完整分析）",
   "reason": "一到三句；只用 cap_calc 數字與登錄表事實"
  },
  "THESIS": {
   "ticker": "代號",
   "verdict": "完好 | 疑似 | 證偽",
+  "_說明": "kill_criteria_status 每列可另填 next_due（YYYY-MM-DD 或 null：下一次證據可得的檢查日；結案或已觸發填 null），框架據此更新登錄表 kill_criteria_due（M2-D5-12）",
+  "_falsify": "證偽時必填（設計決策 D02；其他判定填 null 或省略）：falsify_type＝CONDITION_TRIGGERED | TOP_MGMT_INTEGRITY | ACCOUNTING | ECONOMICS_DETERIORATION；condition_id＝失效條件編號 K1、K2…（提示清單；CONDITION_TRIGGERED 必填；TOP_MGMT_INTEGRITY／ACCOUNTING 沒有對應條件時可為 null，有填須在清單內）；evidence＝[{\"source\": \"文件、節、申報日或 URL\", \"date\": \"YYYY-MM-DD（早於決策日）\"}]（至少一筆）。框架核對：前三類且 condition_id 核對通過（CONDITION_TRIGGERED 須在凍結論點的失效條件清單且該條已觸發；誠信／會計類可為 null）、證據有來源且日期早於決策日 → SELL_ALL；ECONOMICS_DETERIORATION 或核對不過 → 改疑似（停止加碼、同輪 HOLD_REVIEW）",
   "kill_criteria_status": [
    {
     "criterion": "失效條件原文",
@@ -67,24 +71,27 @@
   "reason": "一到三句"
  },
  "FULL_A": {
+  "_說明": "files 為相對工作目錄的路徑，輸出檔寫在 {ticker}/ 下，框架以固定清單（report_A.md、gate3_answers.json）從 {ticker}/ 收檔。持股分支（提示 is_holding＝是；設計決策 D30）：閘門不過不停止，stopped＝false、stopped_at_gate 與 reason_code 填 null，另填 holding_stop＝{\"gate\": 閘門, \"reason_code\": 停止碼, \"reason\": 一句}（gate＝G0 | G1 | G2 | G3 | 4A | G4 | G5 | G6 | 產業；reason_code＝MISSING_DATA | TOO_HARD | REJECT | NOT_THIS_SKILL；字串或其他型別 validate 擋，A3-M3B-04）；非持股或全部通過時 holding_stop 填 null 或省略。rule_ids＝停止所依據的規則編號（字串陣列，編號照 rulebook，P-／SEL-／VAL-／RISK-／POS-／SELL-／PROC-／NEVER-／CORE-／EVID-／MKT-／CR- 開頭，例如 [\"SEL-061\"]、[\"MKT-06B\"]；SKILL §4 NO_ACTION 必填規則編號）：stopped＝true 時必填且不得為空（漏填或格式不對由框架退回 FULL_A 補一次），未停止時填 [] 或省略",
   "ticker": "代號",
   "decision_date": "YYYY-MM-DD",
   "stopped": "true | false",
   "stopped_at_gate": "STEP0 | G0 | G1 | G2 | G3 | 4A | G4 | G5 | G6 | null",
   "reason_code": "MISSING_DATA | TOO_HARD | REJECT | NOT_THIS_SKILL | null",
-  "asset_class": "非金融 | 銀行 | 保險 | 其他金融",
+  "asset_class": "非金融 | 銀行 | 保險 | 其他金融（REIT〔SIC 6798〕屬非金融，與初篩、金融 P/E 中位一致；框架以此決定 cap_input.financial，設計決策 D20）",
   "starting_grade": "A | B | null（由 G1）",
   "downgrades": [
    {
     "step": "G3",
     "rule": "規則編號",
-    "reason": "一句"
+    "driver_id": "獨立驅動因素 id（必填非空，例如 循環性、金融業別、資料缺、治理、困境：同一件事觸發的多條規則只列一列、只降一級，validate 擋重複與空白；報表格式造成的代理口徑只在報告標註、不列降級；設計決策 D18）",
+    "reason": "一句（觸發此降級的事實）",
+    "_max_grade": "選填鍵 max_grade（A | B | C | D 或 null，可省略）：只限「最高 B／C」類上限型規則（例如盈餘不穩定 → C、優勢在人 → B；procedure/06 §1）填該規則的上限等級；有 max_grade 的列不逐級降一級，框架以其餘列逐 driver 降級後與各列 max_grade 取較嚴（A3-M2B-08）；一般逐級降級的列省略或填 null"
    }
   ],
   "moat_tests": {
-   "pricing_power": "強 | 中 | 弱",
-   "attack_copy": "強 | 中 | 弱",
-   "price_cut": "強 | 中 | 弱"
+   "pricing_power": "強 | 中 | 弱 | null（未走到 G3 護城河時 null，不得補填評等）",
+   "attack_copy": "強 | 中 | 弱 | null",
+   "price_cut": "強 | 中 | 弱 | null"
   },
   "moat_evidence": {
    "pricing_power": "足夠 | 缺資料 | null（未走到 G3 護城河時 null）",
@@ -92,17 +99,31 @@
    "price_cut": "足夠 | 缺資料 | null"
   },
   "red_flags": {
-   "exclusion": 0,
-   "warning": 0
+   "exclusion": "數字或 null（未走到 G4 會計警訊時 null；0 只代表已評且為零）",
+   "warning": "數字或 null（同上）"
   },
-  "capital_allocation_net": 0,
+  "capital_allocation_net": "數字或 null（未走到 G5 資本配置時 null；0 只代表已評且淨分為零）",
   "tail_loss_after_tax_pct": "數字或 null",
   "normalized_inputs": {
    "oe_per_share": "數字或 null",
    "g10": "數字或 null",
    "g5": "數字或 null",
-   "excluded_shock_years": [],
-   "roe_std_ex_shock_pp": "數字或 null"
+   "excluded_shock_years": [2020],
+   "_excluded_shock_years": "整數財年清單（例如 [2020]；不寫 \"FY2020\"）；沒有剔除年填 []",
+   "_g_adjustment_reason": "選填鍵 g_adjustment_reason（字串或 null，可省略）：g10／g5 依 VAL-013（基期失真）或 procedure/05（收購期剔除收購貢獻）改算、不是首尾年複合時，寫一句理由與改算方法；非空時框架對 g 差異只記註不退回，E、K 照核（D93）",
+   "_distress_pass": "選填鍵 distress_pass（bool，可省略）：只有做了步 4A 且困境三問全過才填 true，否則省略或填 false；true 時框架機械版業主盈餘在非衝擊年不足 3 年時取 5 年窗口中位（A3-M2C-06）",
+   "_one_time_adjustments": "選填鍵 one_time_adjustments（清單，可省略）：逐項 {fy（整數財年，例如 2020）, item, amount（稅後、加到該年淨利的金額，單位同資料包財報表；加回減損為正、扣除處分利益為負）, source（申報出處）}；框架以機械版業主盈餘加減後與 oe_per_share 比對（D73b）",
+   "roe_std_ex_shock_pp": "數字或 null",
+   "_cap_input": "以下各鍵與 cap_calc 輸入同名，框架在 FULL_B 後以這裡的值覆寫 cap_input（FULL_B 不得另造）；算不出或不適用填 null（insurance 三欄同）；停在步 8 之前時數字欄全填 null、incr_roic_gt_rd 填 null",
+   "norm_eps": "數字或 null（正常化營業 EPS，每股；剔除衝擊年與一次性項目；P4′、W-PE、荒謬級線 50×E 用）",
+   "roe": "數字或 null（正常化 ROE，小數，剔除衝擊年；W-PE 門檻用）",
+   "eps_cagr5": "數字或 null（5 年稀釋 EPS 年複合，小數；W-PE 門檻用）",
+   "incr_roic_gt_rd": "true | false | null（近 5 年增量資本報酬率是否高於折現率 r_d〔長債＋風險溢酬，見 cap_calc〕；true＝確定高於：A 級 P4′ 1.2 倍條件；false＝確定 ≤ r_d：成長不加價值，硬上限不高於 IV0×等級係數；資料不足、未判定填 null〔不改上限〕；D97）",
+   "insurance": {
+    "tbv_ps": "數字或 null（只限保險：每股有形帳面）",
+    "float_ps": "數字或 null（只限保險：每股平均浮存金）",
+    "float_cost": "數字或 null（只限保險：P-58 浮存金加權成本，小數，Σ 稅前承保損失 ÷ Σ 平均浮存金，10 年窗、不足時至少 5 年）"
+   }
   },
   "thesis_draft": {
    "one_liner": "",
@@ -112,28 +133,40 @@
    "kill_criteria": [
     {
      "text": "可觀察、有期限",
-     "due": "YYYY-MM-DD"
+     "due": "YYYY-MM-DD（須晚於決策日；過去或當天的期限永遠不會觸發檢查，validate 擋，A3-M3C-05）"
     }
    ]
   },
   "missing": [],
   "inferred_thresholds_used": [],
   "files": [
-   "report_A.md",
-   "gate3_answers.json"
+   "{ticker}/report_A.md",
+   "{ticker}/gate3_answers.json"
   ]
  },
  "FULL_B": {
-  "_說明": "訊號卡依 berkshire-deep-merged/assets/signal_card_schema.json；登錄表依 registry_schema.json；日誌依 decision_log_schema.json；本物件為摘要",
+  "_說明": "訊號卡依 berkshire-deep-merged/assets/signal_card_schema.json；登錄表依 registry_schema.json；日誌依 decision_log_schema.json；本物件為摘要。files 為相對工作目錄的路徑，輸出檔寫在 {ticker}/ 下，框架以固定清單從 {ticker}/ 收檔。選填欄（validate 不擋缺）：capital_allocation_net_after_price＝數字或 null（P-26a 回購價格面在 G7 後補評的資本配置淨分；未補評或無回購資料填 null；只供報告與降級依據，前半 capital_allocation_net 不改寫；procedure/02 §2）；tail_worst_loss_pct＝數字或 null（P-29 合理最壞損失百分數＝(1 − 悲觀價值 ÷ 現價)×100，例如 40＝40%；框架以 10pp ÷ max(25%, 該值) 覆寫訊號卡 max_weight_pct.tail；缺或非數字時記警示，取訊號卡值與 P-32 減損口徑較嚴者）",
   "ticker": "代號",
-  "decision_id": "{ticker}-{YYYYMMDD}-{n}",
+  "_decision_id": "選填鍵 decision_id（字串或 null，可省略）：框架另編 decision_id，不採用本欄（A3-M3B-03）",
   "signal": "BUY | WATCH | NO_ACTION",
-  "reason_code": "PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT",
-  "stopped_at_gate": "G7..G11 | null",
-  "certainty_grade": "A | B | C | D | null",
+  "reason_code": "PASS_ALL | TOO_HARD | REJECT | MISSING_DATA | RED_LIGHT（BUY、WATCH 一律 PASS_ALL，WATCH 停在哪一步寫 stopped_at_gate；停止碼只配 NO_ACTION，NO_ACTION 不得 PASS_ALL；validate 擋，A3-M3C-07）",
+  "stopped_at_gate": "4A | G7..G11 | null（4A 只限看價後補做的步 4A 判定需要整個商業模式翻轉，設計決策 D71）",
+  "certainty_grade": "A | B | C | D | null（不得高於 FULL_A 結束等級＝phaseA.starting_grade 依 phaseA.downgrades 逐項降一級、再與上限型列 max_grade 取較嚴；只能再降；capital_allocation_net_after_price <0 而前半無資本配置 driver 時須再低一級；高於上限時框架壓回並記 grade_notes，不退回）",
   "auto_buy_cap": "數字或 null",
-  "target_weight": "小數或 0",
-  "first_tranche_weight": "小數或 0",
+  "_target_weight": "選填鍵 target_weight（數字或 null，可省略；小數，0.10＝10%）：只供報告，框架不採用，目標權重由框架以 intended_weight 與各上限計算（A3-M3B-03）",
+  "_first_tranche_weight": "選填鍵 first_tranche_weight（數字或 null，可省略）：框架不採用，首批固定為目標的 50%（A3-M3B-03）",
+  "intended_weight": {
+   "_說明": "G11 意願權重（D13）：框架換算 HIGH 100%／MEDIUM 75%／LOW 50% × 等級上限，再與其他上限取最小（比例為推論）。未走到 G11 時 level 與 reason 填 null；BUY 必填",
+   "level": "HIGH | MEDIUM | LOW | null",
+   "reason": "字串或 null（一句；必須引用 G8 優勢差距與確定性等級）"
+  },
+  "external_drivers": [
+   {
+    "driver": "受控詞彙 id（berkshire-deep-merged/assets/external_drivers.json；只標描述外部變數的失效條件，一條失效條件可標多個 id；沒有任何失效條件描述外部變數時輸出空陣列）",
+    "kill_criterion": "對應的失效條件原文"
+   }
+  ],
+  "external_drivers_change_reason": "字串或 null（與登錄表既有的外部變數判定不同時必填：新事實、來源、日期；P-31 只能因新事實改判）",
   "g8": {
    "_說明": "G8 比較表（procedure/06 §2）；未走到 G8（停在 G7 或之前）時數字填 null、winner 填 未比較。各列照抄 portfolio/holdings_g8.json：best_addable、best_watch、benchmarks；持股 ≥10 檔另比 weakest",
    "self_adjusted": "數字或 null（本標的：業主盈餘殖利率＋保守 g0，乘等級係數）",
@@ -147,12 +180,12 @@
    "winner": "本標的 | 加碼持股 | 國庫券 | 大盤 | 觀察名單次佳 | 未比較"
   },
   "files": [
-   "cap_input.json",
-   "report.md",
-   "signal_card.json",
-   "registry_entry.json",
-   "decision_log.json",
-   "thesis.md"
+   "{ticker}/cap_input.json",
+   "{ticker}/report.md",
+   "{ticker}/signal_card.json",
+   "{ticker}/registry_entry.json",
+   "{ticker}/decision_log.json",
+   "{ticker}/thesis.md"
   ]
  },
  "RED_TEAM": {
@@ -206,7 +239,15 @@
   "trim_fraction": "數字或 null（TRIM 時為賣出比例 0–1）",
   "stop_adding": "true | false",
   "observe_until": "YYYY-MM-DD 或 null（P-50 觀察期限）",
+  "_grade_after": "選填鍵 grade_after（輸出時鍵名寫 grade_after，不加底線；本說明鍵以底線開頭只表示選填）：A | B | C | D | null（H2「持有、確定性降一級、停止加碼」時填降級後的確定性等級；框架只在比登錄表等級保守時更新登錄表 grade，只降不升；M6-D2-10）",
   "falsified_assumption": "字串或 null（被否定的關鍵假設與否定它的事實）",
+  "external_drivers": [
+   {
+    "driver": "受控詞彙 id（berkshire-deep-merged/assets/external_drivers.json；只標描述外部變數的失效條件，一條失效條件可標多個 id；沒有任何失效條件描述外部變數時輸出空陣列）",
+    "kill_criterion": "對應的失效條件原文"
+   }
+  ],
+  "external_drivers_change_reason": "字串或 null（與登錄表既有的外部變數判定不同時必填：新事實、來源、日期；P-31 只能因新事實改判）",
   "reason": "一到三句"
  }
 }

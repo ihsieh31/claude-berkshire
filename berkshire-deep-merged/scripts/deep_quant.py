@@ -6,19 +6,20 @@
   n_tc, loss_tc, loss_tc_ex, roe_med_tc_ex, roe_sd_ex, roe_min_ex, ni_norm_ex5, t30（決策日前最後一個 30 年期公債殖利率，小數）
 以及 X99 欄位 ni5_mean、ni5_med、roe_sd5、roe_min5、roe_med5、n_roe5、loss_yrs5、eps_cagr5、de、pe、mcap、ocf_sum5_c、nonfin、util、screen_decision。
 
-規則出處見 ../references/05_valuation_caps.md、06_certainty_position.md、11_distress_check.md 與 10_sources_and_merge.md（X100 節）。
+規則出處見 ../references/procedure/05_valuation_caps.md、06_certainty_position.md、11_distress_check.md；X100 參數選法的研究紀錄 10_sources_and_merge.md 未隨套件附帶。
 X102：auto_buy_gates() 把「自動買進」限定為三閘門全過（閘門 1 初篩未刪、閘門 2 現價 < 買價上限、閘門 3 固定問卷通過，見 gate3_check.py）；
-initial_position()、add_allowed() 依 v3.1 P-28、P-33、P-36、P-42、P-43 算首批與加碼（references/12_auto_buy_gates.md）。
+initial_position()、add_allowed() 依 v3.1 P-28、P-33、P-36、P-42、P-43 算首批與加碼（references/procedure/12_auto_buy_gates.md）。
 """
 import numpy as np, pandas as pd
 
-# ---- 參數（X100 固定預設；選法見 references/10_sources_and_merge.md X100 節，網格與目標事先寫定於測試規格） ----
+# ---- 參數（X100 固定預設；選法見 10_sources_and_merge.md X100 節〔未隨套件附帶〕，網格與目標事先寫定於測試規格） ----
 STAB_SD = 0.04        # 跨循環 ROE 標準差上限（已剔除產業共同衝擊年）
 G_MAX = 0.10          # 隱含成長絕對上限
 G_NOM_SPREAD = -0.01  # 名目經濟成長代理＝30 年期殖利率＋此值（推論）
 R_FLOOR = 0.10        # r_d 下限（「至少 10% 稅前」）
 R_SPREAD = 0.03       # r_d＝max(下限, 30 年期＋3pp)
 SHOCK_RATIO = 0.5     # 產業共同衝擊年：該年產業中位 ROE ≤0 或 < 前 5 年產業中位的一半
+SHARES_JUMP = (0.55, 1.8)  # 相鄰年度稀釋股數比超出此範圍 → 疑似拆股基準未追溯（須與 build_dossier.SHARES_JUMP 同步；本地常數，免得單獨複製 deep skill 時匯入 build_dossier→fetch_edgar 失敗；A3-M2B-04）
 
 
 def _pv(g0, r, gl=0.04, gt=None):
@@ -133,7 +134,7 @@ def deep(sdf, STAB_SD=STAB_SD, G_MAX=G_MAX, G_NOM_SPREAD=G_NOM_SPREAD, R_FLOOR=R
     return d
 
 
-# ---- X102 自動買進三閘門與部位（references/12_auto_buy_gates.md；數字全部沿用 v3.1，不新設上限） ----
+# ---- X102 自動買進三閘門與部位（references/procedure/12_auto_buy_gates.md；數字全部沿用 v3.1，不新設上限） ----
 FIRST_TRANCHE = 0.50            # P-36 首批＝目標的 50%；自動模式不用 70% 加速條款
 MIN_TARGET = 0.03               # P-33 開倉目標 ≥ 權益 3%
 GRADE_CAP = {'A': 0.15, 'B': 0.10}   # P-28 宿主單檔建倉成本上限
@@ -180,3 +181,113 @@ def add_allowed(current_weight, target_weight, grade, thesis_intact, gates_repas
     if current_weight >= lim:
         return False, '已達目標或等級上限（P-28）'
     return True, f'可加至 {lim:.1%}'
+
+
+# ---- D26：機械版業主盈餘（框架比對 FULL_A 手算用；逐檔流程只用來核對，不取代模型數字） ----
+# SKILL §3 的「機械部分」：OE_t＝淨利＋折舊攤銷−K×折舊攤銷（不剔除一次性項目——那是判斷，留給模型）；
+# K：5 年中位 資本支出÷營收 ≥8% 且 資本支出÷折舊 ≥1.2 → max(1.2, 5 年中位 資本支出÷折舊×0.8)，上限 1.6；否則 1.0。
+# E＝近 5 年非衝擊年 OE 中位（≥3 年），不足 → 5 年平均；每股以最近年度稀釋股數。
+# g10／g5：每股 OE（各年自身股數）在 10／5 年窗口的首尾年複合（9／4 期）；任一端 ≤0 或缺 → None（推論：SKILL 未指定算法）。
+HEAVY_CAPEX_REV = 0.08
+HEAVY_CAPEX_DNA = 1.2
+K_MIN, K_MAX, K_SCALE = 1.2, 1.6, 0.8
+_ROW_KEYS = {"net_income": ("net_income", "淨利"), "dna": ("dna", "折舊攤銷"), "capex": ("capex", "資本支出"),
+             "revenue": ("revenue", "營收"), "shares": ("shares", "稀釋加權股數")}
+
+
+def dossier_table(md):
+    """從資料包 md 的「## 10 年財報」表取出 {key: {fy: 值}}（key＝net_income／dna／capex／revenue／shares）。
+    只用比例與每股，單位（美元或百萬）互相抵銷；找不到表 → {}。"""
+    import re
+    lines = md.splitlines()
+    try:
+        i = next(n for n, ln in enumerate(lines) if ln.startswith("## 10 年財報"))
+    except StopIteration:
+        return {}
+    rows = []
+    for ln in lines[i + 1:]:
+        if ln.startswith("## "):
+            break
+        if ln.strip().startswith("|"):
+            rows.append([c.strip() for c in ln.strip().strip("|").split("|")])
+    if len(rows) < 3:
+        return {}
+    years = [int(m.group(1)) if (m := re.search(r"(\d{4})", c)) else None for c in rows[0][1:]]
+    out = {}
+    for r in rows[2:]:
+        label = r[0]
+        key = next((k for k, names in _ROW_KEYS.items()
+                    if label == names[0] or label.startswith(names[1])), None)
+        if key is None or key in out:
+            continue
+        vals = {}
+        for y, c in zip(years, r[1:]):
+            try:
+                v = float(c.replace(",", ""))
+            except ValueError:
+                continue
+            if y is not None and v == v:
+                vals[y] = v
+        out[key] = vals
+    return out
+
+
+def mechanical_oe(table, shock_years=(), adjustments=None, distress_pass=False):
+    """table：dossier_table() 的輸出；shock_years：同業共同衝擊年（框架 _peers.json）。
+    adjustments：{財年: 稅後金額}，模型逐項列出的一次性調整（加回減損、扣除處分利益等；單位同資料包財報表），
+    加到該年淨利後再算 OE（D73b）；None＝不調整。
+    distress_pass：4A 困境三問全過（SKILL §3／procedure/11 §3）→ 非衝擊年不足 3 年時 E 取 5 年窗口中位（含衝擊年），
+    不改用平均（A3-M2C-06）；預設 False＝原行為。
+    資本支出比率一律用 abs(capex)（與 build_dossier 一致；A3-M2A-09）。相鄰年稀釋股數比超出 SHARES_JUMP（與 build_dossier 同值）
+    （疑似拆股基準未追溯）→ 窗口跨該年的 g10／g5 回 None，basis 註明（A3-M2B-04）。
+    回傳 {"E", "K", "g10", "g5", "oe_by_year", "years_used", "excluded_shock_years", "fy_last", "basis"}；
+    淨利、折舊攤銷或股數不足（近 5 年 <3 年有 OE）→ None。"""
+    ni, dna, capex = table.get("net_income") or {}, table.get("dna") or {}, table.get("capex") or {}
+    rev, sh = table.get("revenue") or {}, table.get("shares") or {}
+    years = sorted(y for y in ni if y in dna)
+    if not years or not sh:
+        return None
+    fy_last = max(ni)
+    last5 = [y for y in range(fy_last - 4, fy_last + 1)]
+    r_rev = [abs(capex[y]) / rev[y] for y in last5 if y in capex and rev.get(y)]   # 帶號 capex 會讓 K 恆 1.0（A3-M2A-09）
+    r_dna = [abs(capex[y]) / dna[y] for y in last5 if y in capex and dna.get(y)]
+    K = 1.0
+    if r_rev and r_dna and float(np.median(r_rev)) >= HEAVY_CAPEX_REV and float(np.median(r_dna)) >= HEAVY_CAPEX_DNA:
+        K = min(K_MAX, max(K_MIN, float(np.median(r_dna)) * K_SCALE))
+    adj = {int(y): float(v) for y, v in (adjustments or {}).items()}
+    oe = {y: ni[y] + adj.get(y, 0.0) + dna[y] - K * dna[y] for y in years}
+    sh_last = sh.get(fy_last) or sh[max(sh)]
+    if not sh_last or sh_last <= 0:
+        return None
+    shock = {int(y) for y in shock_years or ()}
+    win = [y for y in last5 if y in oe]
+    if len(win) < 3:
+        return None
+    ex = [y for y in win if y not in shock]
+    if len(ex) >= 3:
+        E_tot, basis = float(np.median([oe[y] for y in ex])), "5 年非衝擊年中位"
+    elif distress_pass:
+        ex, E_tot, basis = win, float(np.median([oe[y] for y in win])), "5 年中位（非衝擊年不足 3 年；4A 三問全過）"
+    else:
+        ex, E_tot, basis = win, float(np.mean([oe[y] for y in win])), "5 年平均（非衝擊年不足 3 年）"
+
+    sy = sorted(y for y in sh if sh.get(y) and sh[y] > 0)
+    jumps = [b for a, b in zip(sy, sy[1:]) if not SHARES_JUMP[0] <= sh[b] / sh[a] <= SHARES_JUMP[1]]
+    skipped = []
+
+    def ps(y):
+        return oe[y] / sh[y] if y in oe and sh.get(y) else None
+
+    def cagr(n):   # n 年窗口（fy_last−n+1 … fy_last）首尾年複合，n−1 期
+        if any(fy_last - n + 1 < j <= fy_last for j in jumps):   # 跨股數跳動年：每股成長不可比（A3-M2B-04）
+            skipped.append(f"g{n}")
+            return None
+        a, b = ps(fy_last - n + 1), ps(fy_last)
+        return (b / a) ** (1 / (n - 1)) - 1 if a and b and a > 0 and b > 0 else None
+    g10, g5 = cagr(10), cagr(5)
+    if skipped:
+        basis += (f"；{'／'.join(skipped)} 不算：股數跳動年 {jumps}（相鄰年稀釋股數比超出 {SHARES_JUMP}，"
+                  "疑似拆股基準未追溯）")
+    return {"E": E_tot / sh_last, "K": K, "g10": g10, "g5": g5, "fy_last": fy_last,
+            "oe_by_year": {y: oe[y] / sh_last for y in years}, "years_used": ex,
+            "excluded_shock_years": sorted(y for y in win if y in shock), "basis": basis}

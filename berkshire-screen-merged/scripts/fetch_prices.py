@@ -10,6 +10,8 @@
 抓不到的代號：price 等欄留空 → 不影響刪除判定（刪除只看財報），深度分析改用正式報價。
 價格用於市值、波動、3 年回撤與困境標記；跌幅不是買賣理由。
 時點：--asof 必須與 fetch_edgar.py 的決策日相同；只用 asof 當日或之前的價格（未給 asof＝今天、取最新報價）。
+  Yahoo 月 K 線時間戳為月初、當月那根的收盤是抓取當下：給了早於今天的 asof 時，丟掉含 asof 的當月 K 線
+  （price＝上月底收盤、price_date＝上月 K 線時間戳；A3-M1C-09）。--manual 不受影響。
 拆股：Yahoo 的 close 已依「抓取當下為止」的全部拆股調整；輸出 splits（日期:比例；比例＝新股數/舊股數），
 screen.py 以「封面股數申報日之後」的拆股比例調整股數，使市值＝close × 調整後股數 在同一拆股基準。
 """
@@ -41,8 +43,13 @@ def yahoo_monthly(tk):
     return s, last_px, splits
 
 
-def feats(s, asof, last_px=None):
-    s = s[s.date <= asof].set_index("date").sort_index()
+def feats(s, asof, last_px=None, drop_asof_month=False):
+    """drop_asof_month：丟掉與 asof 同年同月的 K 線（Yahoo 月線＋歷史 asof；該根收盤晚於 asof，A3-M1C-09）。"""
+    s = s[s.date <= asof]
+    if drop_asof_month:
+        d = pd.to_datetime(s.date)
+        s = s[~((d.dt.year == asof.year) & (d.dt.month == asof.month))]
+    s = s.set_index("date").sort_index()
     if s.empty:
         return {}
     m = s.adj_close.resample("ME").last().dropna()
@@ -64,6 +71,7 @@ def main():
     ap.add_argument("--manual", default=None)
     a = ap.parse_args()
     asof = pd.Timestamp(a.asof) if a.asof else pd.Timestamp.now()
+    hist = a.asof is not None and asof.normalize() < pd.Timestamp.now().normalize()   # 歷史決策日
     tickers = [x.strip().upper() for x in open(a.tickers) if x.strip() and not x.startswith("#")]
     man = pd.read_csv(a.manual, parse_dates=["date"]) if a.manual else None
     rows = []
@@ -77,10 +85,12 @@ def main():
                 r.update(feats(s, asof)); r["price_src"] = "manual"
             else:
                 s, lp, splits = yahoo_monthly(tk)
-                r.update(feats(s, asof, lp if a.asof is None else None)); r["price_src"] = "yahoo_chart"; r["splits"] = splits
+                r.update(feats(s, asof, lp if a.asof is None else None, drop_asof_month=hist))
+                r["price_src"] = "yahoo_chart"; r["splits"] = splits
                 time.sleep(0.5)
         except Exception as e:
             r["price_src"] = f"失敗：{type(e).__name__}"
+            time.sleep(0.5)   # 失敗也守請求間隔 ≥0.5 秒（A3-M1E-05）
         rows.append(r)
     pd.DataFrame(rows).to_csv(a.out, index=False)
     print(f"{len(rows)} 檔 → {a.out}")

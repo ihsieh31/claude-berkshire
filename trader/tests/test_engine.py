@@ -72,6 +72,8 @@ class Env:
         d = self.paths.work / run / ticker
         (d / "dossier").mkdir(parents=True, exist_ok=True)
         (d / "sec").mkdir(parents=True, exist_ok=True)
+        (d / "dossier").mkdir(parents=True, exist_ok=True)
+        (d / "dossier" / ".prep_done").write_text("ok\n", encoding="utf-8")  # 前置完成標記
         (d / "sec" / "10-K_2026-02-20_000001.txt").write_text("# 10-K\nItem 1. Business\nDrinks.\n", encoding="utf-8")
         (d / "dossier" / f"{ticker}.md").write_text(f"# 資料包：{ticker}\n", encoding="utf-8")
         p = d / "dossier" / f"{ticker}_price.json"
@@ -135,7 +137,7 @@ def thesis(verdict: str) -> dict:
     return {
         "ticker": "KO", "verdict": verdict,
         "kill_criteria_status": [{"criterion": "毛利率連兩季下滑", "status": "未觸發", "evidence": "10-Q 2026-10-01"}],
-        "r_list_status": [{"item": "R1", "status": "無變化", "evidence": "測試"}], "new_facts": [], "reason": "測試",
+        "r_list_status": [{"item": f"R{i}", "status": "無變化", "evidence": "測試"} for i in range(1, 11)], "new_facts": [], "reason": "測試",
     }
 
 
@@ -150,11 +152,17 @@ def full_a(stopped: bool = False) -> dict:
         "moat_evidence": {"pricing_power": "足夠", "attack_copy": "缺資料", "price_cut": "足夠"},
         "red_flags": {"exclusion": 0, "warning": 0},
         "capital_allocation_net": 0, "tail_loss_after_tax_pct": 30.0,
-        "normalized_inputs": {"oe_per_share": 3.2, "g10": None, "g5": 0.05,
-                              "excluded_shock_years": [], "roe_std_ex_shock_pp": 2.1},
+        # 與 CAP_INPUT 一致（FULL_B 的 cap_input 須沿用 phaseA；P19 M3_D6-01 會比對）
+        "normalized_inputs": {"oe_per_share": CAP_INPUT["oe"], "g10": CAP_INPUT["g10"], "g5": CAP_INPUT["g5"],
+                              "excluded_shock_years": [], "roe_std_ex_shock_pp": 2.1,
+                              # P20（M2_D4_03）：與 cap_calc 同名的估值欄，框架以此覆寫 cap_input
+                              "norm_eps": CAP_INPUT["norm_eps"], "roe": CAP_INPUT["roe"],
+                              "eps_cagr5": CAP_INPUT["eps_cagr5"], "incr_roic_gt_rd": CAP_INPUT["incr_roic_gt_rd"],
+                              "insurance": {"tbv_ps": None, "float_ps": None, "float_cost": None}},
         "thesis_draft": {"one_liner": "測試論點", "key_assumptions": ["假設 A", "假設 B", "假設 C"],
-                         "kill_criteria": [{"text": "毛利率連兩季下滑", "due": "2027-06-30"}]},
-        "missing": [], "inferred_thresholds_used": [],
+                         "kill_criteria": [{"text": "毛利率連兩季下滑", "due": "2027-06-30"},
+                                           {"text": "自由現金流連兩年為負", "due": "2027-12-31"}]},
+        "missing": [], "inferred_thresholds_used": [], "rule_ids": ["SEL-061"] if stopped else [],   # RM2-9
         "files": {"KO/gate3_answers.json": json.dumps(gate3_pass_answers(), ensure_ascii=False),
                   "KO/report_A.md": "# A 報告\n"},
     }
@@ -168,9 +176,11 @@ G8_NONE = {"self_adjusted": None, "best_holding": None, "best_holding_adjusted":
 def full_b(signal: str = "BUY") -> dict:
     return {
         "ticker": "KO", "decision_id": "KO-20261016-1", "signal": signal,
-        "reason_code": "PASS_ALL" if signal == "BUY" else "TOO_HARD",
+        "reason_code": "PASS_ALL" if signal in ("BUY", "WATCH") else "TOO_HARD",   # WATCH 只配 PASS_ALL（A3-M3C-07）
         "stopped_at_gate": None, "certainty_grade": "B",
         "auto_buy_cap": 12.5, "target_weight": 0.05, "first_tranche_weight": 0.025,
+        "intended_weight": {"level": "MEDIUM", "reason": "G8 優勢差距約 1pp、確定性等級 B"},
+        "external_drivers": [], "external_drivers_change_reason": None,
         "g8": G8_NONE,
         "files": {"KO/cap_input.json": json.dumps(CAP_INPUT), "KO/report.md": "# 報告\n",
                   "KO/signal_card.json": json.dumps(consistent_card(signal), ensure_ascii=False),
@@ -229,7 +239,8 @@ def test_full_dag_runs_to_done(tmp_path):
     for jt in ("DOSSIER", "FULL_A", "RED_TEAM"):
         assert list(Path(env.by_type(jt)[0]["sandbox"]).rglob("holdings_g8.json")) == []
     card = json.loads(env.conn.execute("SELECT data FROM signals").fetchone()[0])
-    assert card["g8_adjusted_expected_return"] == pytest.approx((5.0 / 60.0 + 0.045) * 0.75, abs=1e-4)
+    # 價格取價格檔 60.5（P19：框架以價格檔覆寫 cap_input.price，模型抄的 60.0 不算）
+    assert card["g8_adjusted_expected_return"] == pytest.approx((5.0 / 60.5 + 0.045) * 0.75, abs=1e-4)
     # gate3 答覆檔由 FULL_A 收集到同檔輸出區，且早於 FULL_B 建立時間
     td = env.paths.work / RUN / "KO"
     gate3 = td / "gate3_answers.json"
@@ -309,8 +320,18 @@ def test_triage_escalates_to_thesis_then_dossier(tmp_path):
     assert dossier_rows[0]["status"] == "done"
 
 
+class _NoNewFilingsSec:
+    """查得到 CIK、窗口內沒有新申報（無 SEC 客戶端時 THESIS 至少疑似，M3-RS1-01）。"""
+    def cik_for(self, ticker):
+        return "0000021344"
+
+    def filings(self, cik, asof, since=None, forms=None):
+        return []
+
+
 def test_thesis_intact_does_not_create_dossier(tmp_path):
     env = make_env(tmp_path, {"TRIAGE": triage(True), "THESIS": thesis("完好")})
+    env.engine.ctx.sec = _NoNewFilingsSec()
     env.add(env.job("KO", "TRIAGE", 1))
     env.engine.run(RUN)
     assert env.by_type("DOSSIER") == []
@@ -350,22 +371,25 @@ def test_invalid_twice_fails_and_logs_decision(tmp_path):
     (cap_dir / "KO.json").write_text(json.dumps(CAP_INPUT), encoding="utf-8")
     env.add(env.job("KO", "PRICE", 1, params={"price": 60.5, "price_date": ASOF}))
 
-    env.engine.run(RUN)
+    out = env.engine.run(RUN)
 
     row = env.by_type("PRICE")[0]
-    assert row["status"] == "failed"
+    assert row["status"] == "conservative_fallback"  # D43：已寫保守結論 → 不算失敗
     assert row["error"] == "invalid_output"
     assert row["attempts"] == 2
     dec = env.conn.execute("SELECT signal, reason_code FROM decisions WHERE ticker='KO'").fetchall()
     assert len(dec) == 1
     assert (dec[0]["signal"], dec[0]["reason_code"]) == ("NO_ACTION", "MISSING_DATA")
+    assert out["status"] == "done" and _run_status(env) == "done"
+    an = env.conn.execute("SELECT kind, pause_trading FROM anomalies WHERE ticker='KO'").fetchall()
+    assert [tuple(r) for r in an] == [("job_conservative_fallback", 0)]  # 低嚴重度、不暫停；無 job_failed
 
 
 # ---------------------------------------------------------------- 5. 依賴失敗
 
 def test_dependency_failure_skips_dependents_only(tmp_path):
     # 沒有 DOSSIER 的回應 → FakeRunner 拋 FatalLLMError → DOSSIER 失敗
-    env = make_env(tmp_path, {"TRIAGE": triage(False)})
+    env = make_env(tmp_path, {"TRIAGE": {**triage(False), "ticker": "MSFT"}})   # 輸出 ticker 須與工作相符（M3_D1-10）
     dos = env.add(env.job("KO", "DOSSIER", 1))
     env.add(env.job("KO", "FULL_A", 1, deps=[dos]))
     env.add(env.job("MSFT", "TRIAGE", 1))  # 獨立工作不受影響
@@ -475,7 +499,8 @@ def test_dossier_with_price_text_is_scrubbed_before_full_a(tmp_path):
 # ---------------------------------------------------------------- 9. 傳輸錯誤
 
 def test_transport_error_exhausts_retries_and_others_continue(tmp_path):
-    env = make_env(tmp_path, {"DOSSIER": TransportError("連線失敗"), "TRIAGE": triage(False)})
+    env = make_env(tmp_path, {"DOSSIER": TransportError("連線失敗"),
+                              "TRIAGE": {**triage(False), "ticker": "MSFT"}})   # 輸出 ticker 須與工作相符（M3_D1-10）
     env.price_file("KO")
     env.add(env.job("KO", "DOSSIER", 1))
     env.add(env.job("MSFT", "TRIAGE", 1))
@@ -485,13 +510,14 @@ def test_transport_error_exhausts_retries_and_others_continue(tmp_path):
     dos = env.by_type("DOSSIER")[0]
     assert dos["status"] == "failed"
     assert "TransportError" in dos["error"]
-    assert sum(1 for c in env.fake.calls if c.job_type == "DOSSIER") == 4  # 1 + 3 次重試
+    assert sum(1 for c in env.fake.calls if c.job_type == "DOSSIER") == 1  # D47：非額度類傳輸錯誤不重試
     assert env.by_type("TRIAGE")[0]["status"] == "done"
 
 
 # ---------------------------------------------------------------- 10. 紅隊升級與上限
 
-def test_red_team_fatal_twice_ends_as_watch(tmp_path):
+def test_red_team_fatal_twice_ends_as_red_light(tmp_path):
+    """D24：紅隊修正後仍判致命 → NO_ACTION／RED_LIGHT（G9 停止碼），不是 WATCH。"""
     responses = {**full_responses(), "RED_TEAM": red_team(True)}  # 兩輪都 fatal
     env = make_env(tmp_path, responses)
     env.add(env.job("KO", "DOSSIER", 1))
@@ -505,8 +531,11 @@ def test_red_team_fatal_twice_ends_as_watch(tmp_path):
     assert json.loads(fb[1]["params"])["redteam_round"] == 1
     rt = env.by_type("RED_TEAM")
     assert len(rt) == 2
-    assert json.loads(rt[-1]["result"])["final_signal"] == "WATCH"
+    assert json.loads(rt[-1]["result"])["final_signal"] == "NO_ACTION"
     assert "final_signal" not in json.loads(rt[0]["result"])
+    d = env.conn.execute("SELECT signal, reason_code FROM decisions WHERE ticker='KO' "
+                         "ORDER BY rowid DESC LIMIT 1").fetchone()
+    assert (d["signal"], d["reason_code"]) == ("NO_ACTION", "RED_LIGHT")
 
 
 # ---------------------------------------------------------------- 不合格輸出的保守處理
@@ -517,7 +546,8 @@ def test_triage_invalid_escalates_to_thesis(tmp_path):
 
     env.engine.run(RUN)
 
-    assert env.by_type("TRIAGE")[0]["status"] == "failed"
+    tri = env.by_type("TRIAGE")[0]
+    assert (tri["status"], tri["error"]) == ("conservative_fallback", "invalid_output")  # D43
     th = env.by_type("THESIS")
     assert len(th) == 1 and th[0]["status"] == "done"
     assert json.loads(th[0]["params"])["triage_invalid"] is True
@@ -530,9 +560,11 @@ def test_corp_action_invalid_writes_anomaly_and_pauses(tmp_path):
 
     env.engine.run(RUN)
 
-    assert env.by_type("CORP_ACTION")[0]["status"] == "failed"
-    an = env.conn.execute("SELECT kind, pause_trading, status FROM anomalies WHERE ticker='KO'").fetchall()
-    assert [tuple(r) for r in an] == [("corp_action_invalid_output", 1, "open")]
+    assert env.by_type("CORP_ACTION")[0]["status"] == "conservative_fallback"  # D43
+    an = env.conn.execute("SELECT kind, pause_trading, status FROM anomalies "
+                          "WHERE ticker='KO'").fetchall()
+    assert sorted(tuple(r) for r in an) == [("corp_action_invalid_output", 1, "open"),
+                                            ("job_conservative_fallback", 0, "open")]  # 仍暫停交易，且無 job_failed／多餘異常
     assert env.conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 0
 
 
@@ -556,7 +588,7 @@ def _run_status(env) -> str:
 
 
 def test_run_with_failed_job_is_failed_and_writes_anomaly_once(tmp_path):
-    env = make_env(tmp_path, {"TRIAGE": triage(False)})
+    env = make_env(tmp_path, {"TRIAGE": {**triage(False), "ticker": "MSFT"}})   # 輸出 ticker 須與工作相符（M3_D1-10）
     dos = env.add(env.job("KO", "DOSSIER", 1))  # 沒有回應 → 失敗
     env.add(env.job("KO", "FULL_A", 1, deps=[dos]))
     env.add(env.job("MSFT", "TRIAGE", 1))
@@ -613,14 +645,17 @@ def test_retry_failed_resets_and_reruns_keeping_call_history(tmp_path):
     row = env.conn.execute("SELECT status, error, finished_at FROM jobs WHERE job_id=?", (ids[0],)).fetchone()
     assert (row["status"], row["error"], row["finished_at"]) == ("pending", None, None)
     assert env.conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == calls  # 歷史呼叫保留
-    assert env.conn.execute("SELECT status FROM anomalies WHERE kind='job_failed'").fetchone()[0] == "resolved"
+    jf = "SELECT status FROM anomalies WHERE kind='job_failed' AND ticker=?"
+    assert env.conn.execute(jf, ("KO",)).fetchone()[0] == "open"  # M5_D9-05：retry 只重設，重跑完成才結案
     assert env.engine.run(RUN)["status"] == "failed"  # MSFT 未重設，仍是失敗
     assert [r["status"] for r in env.rows()] == ["done", "failed"]
+    assert env.conn.execute(jf, ("KO",)).fetchone()[0] == "resolved"
+    assert env.conn.execute(jf, ("MSFT",)).fetchone()[0] == "open"
 
 
 def test_retry_skips_corp_action_and_reset_dependents(tmp_path):
     from trader.jobs.engine import retry_failed
-    env = make_env(tmp_path, {"TRIAGE": triage(False)})
+    env = make_env(tmp_path, {"TRIAGE": {**triage(False), "ticker": "MSFT"}})   # 輸出 ticker 須與工作相符（M3_D1-10）
     dos = env.add(env.job("KO", "DOSSIER", 1))
     env.add(env.job("KO", "FULL_A", 1, deps=[dos]))
     env.add(env.job("KO", "CORP_ACTION", 1))

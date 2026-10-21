@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from test_engine import ASOF, RUN, full_responses, make_env
+from test_engine import ASOF, RUN, dossier_ok, full_responses, make_env
 
 from trader import cli, db
 from trader.jobs import approvals as A
@@ -59,7 +59,7 @@ def test_approve_then_run_includes_red_team_without_second_approval(tmp_path):
     assert A.list_items(env.conn, ("done",))[0]["ticker"] == "KO"
     assert A.add_block_reason(env.conn, "KO") is None
     # 沒有已同意項目時什麼都不做
-    assert run_approved(env.config, env.paths, env.conn, router=env.router, clients={}) == {"runs": {}}
+    assert run_approved(env.config, env.paths, env.conn, router=env.router, clients={})["runs"] == {}
 
 
 def test_deferred_not_in_approve_all_and_still_blocks_add(tmp_path):
@@ -84,7 +84,7 @@ def test_reject_writes_missing_data_and_skips_job(tmp_path):
     dec = env.conn.execute("SELECT decision_id, signal, reason_code FROM decisions").fetchall()
     assert [(r["decision_id"], r["signal"], r["reason_code"]) for r in dec] == [(dids[0], "NO_ACTION", "MISSING_DATA")]
     assert A.add_block_reason(env.conn, "KO") is None
-    assert run_approved(env.config, env.paths, env.conn, router=env.router, clients={}) == {"runs": {}}
+    assert run_approved(env.config, env.paths, env.conn, router=env.router, clients={})["runs"] == {}
     with pytest.raises(A.ApprovalError):
         A.approve(env.conn, [1])
 
@@ -155,7 +155,8 @@ def test_late_decision_picked_up_by_next_daily(tmp_path):
 
 
 def test_cli_list_approve_reject(tmp_path, capsys):
-    env = _env(tmp_path)
+    # 輸出 ticker 須與工作相符（M3_D1-10）：PEP 的 DOSSIER 回應另給
+    env = _env(tmp_path, {**full_responses(), ("DOSSIER", "PEP"): {**dossier_ok(), "ticker": "PEP"}})
     env.price_file("PEP")
     _run_to_gate(env)
     _run_to_gate(env, ticker="PEP")

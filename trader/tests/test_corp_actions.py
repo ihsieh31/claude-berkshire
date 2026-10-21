@@ -62,7 +62,12 @@ def cap_file(paths, T, data):
     return p
 
 
-def event(T="KO", pb=100.0, pa=25.0, source="alpaca", alp=None, date=ASOF):
+def event(T="KO", pb=100.0, pa=25.0, source="alpaca", alp=None, date=ASOF, alp_type="forward_split"):
+    """source=alpaca 而未給 alp 時，帶一筆只有類型的 Alpaca 記錄（正式流程 Alpaca 事件恆帶 type；
+    比例／現金留空，不參與數值比對）。"""
+    if source == "alpaca" and alp is None:
+        alp = {"ticker": T, "type": alp_type, "ex_date": date, "ratio_new_per_old": None, "cash_per_share": None,
+               "new_ticker": None, "raw": {"id": "1"}, "payable_date": None}
     return {"event_id": f"{T}:{source}:{date}:1", "ticker": T, "source": source, "date": date,
             "text": "原文", "alpaca": alp, "url": None, "price_before": pb, "date_before": "2026-10-15",
             "price_after": pa, "date_after": date}
@@ -103,7 +108,7 @@ def test_verify_forward_split_passes(env):
 def test_reverse_split_with_cash_in_lieu_passes(env):
     hold(env.conn, "KO", 27, 10.0)
     res = result(action_type="合股", ratio_new_per_old=0.1, fractional_handling="現金了結")
-    assert ca.verify(res, event(pb=10.0, pa=100.0), ca.position_of(env.conn, "KO")) == []
+    assert ca.verify(res, event(pb=10.0, pa=100.0, alp_type="reverse_split"), ca.position_of(env.conn, "KO")) == []
 
 
 def test_ratio_disagrees_with_alpaca_is_rejected(env):
@@ -138,20 +143,20 @@ def test_needs_human_types_return_human_error(env, res):
 def test_fraction_with_unknown_handling_is_rejected(env):
     hold(env.conn, "KO", 27, 10.0)
     res = result(action_type="合股", ratio_new_per_old=0.1, fractional_handling="不明")
-    errs = ca.verify(res, event(pb=10.0, pa=100.0), ca.position_of(env.conn, "KO"))
+    errs = ca.verify(res, event(pb=10.0, pa=100.0, alp_type="reverse_split"), ca.position_of(env.conn, "KO"))
     assert any("零股" in e for e in errs)
 
 
 def test_discarding_fraction_breaks_market_value_conservation(env):
     hold(env.conn, "KO", 7, 10.0)
     res = result(action_type="合股", ratio_new_per_old=0.1, fractional_handling="無條件捨去")
-    errs = ca.verify(res, event(pb=10.0, pa=100.0), ca.position_of(env.conn, "KO"))
+    errs = ca.verify(res, event(pb=10.0, pa=100.0, alp_type="reverse_split"), ca.position_of(env.conn, "KO"))
     assert any("市值不守恆" in e for e in errs)
 
 
 def test_cash_dividend_requires_positive_cash(env):
     res = result(action_type="現金股利", ratio_new_per_old=None, cash_per_share=0)
-    assert any("現金" in e for e in ca.verify(res, event(pb=None, pa=None), None))
+    assert any("現金" in e for e in ca.verify(res, event(pb=None, pa=None, alp_type="cash_dividend"), None))
 
 
 # ---------------------------------------------------------------- 入帳：比例類
@@ -169,7 +174,7 @@ def test_reverse_split_cash_in_lieu_and_avg_cost(env):
     res = result(action_type="合股", ratio_new_per_old=0.1, fractional_handling="現金了結")
     ca.apply(env.conn, env.paths, res, event(pb=10.0, pa=100.0), ASOF)
     qty, avg = pos(env.conn, "KO")
-    assert qty == 2 and avg == pytest.approx(135.0)
+    assert qty == 2 and avg == pytest.approx(100.0)   # 零股 0.7（原 7 股、成本 70）以現金了結收回：整股 2 股成本 200（M7-D1-07）
     assert total(env.conn, "corp_action_cash") == pytest.approx(70.0)
 
 
@@ -207,6 +212,31 @@ def test_orders_and_registry_and_cap_inputs_stay_in_sync(env):
     assert cap["insurance"] == {"tbv_ps": 2.0, "float_ps": 0.5} and cap["ticker"] == "KO"
 
 
+def _late_order(conn, oid, created):
+    conn.execute(
+        "INSERT INTO orders(order_id, ticker, side, qty, limit_price, status, decision_id, created_date, updated_at) "
+        "VALUES (?,'KO','BUY',10,100.0,'open','d1',?,?)", (oid, created, NOW))
+    conn.commit()
+
+
+def test_zero_shares_skips_orders_created_on_or_after_effective_date(env):
+    """RM7-2R2（D83）：0 股晚到事件（事件日 ≤ 前一交易日）時生效日當天／之後建立的委託已是新價位，不換算；
+    生效日前建立的照舊換算（準時事件一律換算，見 test_fix_F3_CA，A3-M7C-08）。"""
+    late = "2026-10-14"
+    _late_order(env.conn, "KO-old", "2026-10-13")
+    _late_order(env.conn, "KO-new", late)
+    ca.apply(env.conn, env.paths, result(effective_date=late), event(pb=None, pa=None, date=late), ASOF)
+    o = {r["order_id"]: (r["qty"], r["limit_price"]) for r in env.conn.execute("SELECT order_id, qty, limit_price FROM orders")}
+    assert o["KO-old"] == (40, 25.0) and o["KO-new"] == (10, 100.0)
+
+
+def test_holding_still_rescales_orders_created_on_effective_date(env):
+    hold(env.conn, "KO", 10, 100.0)
+    _late_order(env.conn, "KO-new", ASOF)
+    ca.apply(env.conn, env.paths, result(), event(), ASOF)
+    assert env.conn.execute("SELECT qty FROM orders WHERE order_id='KO-new'").fetchone()[0] == 40
+
+
 def test_order_that_rounds_to_zero_shares_is_cancelled(env):
     hold(env.conn, "KO", 10, 10.0)
     order(env.conn, "KO-buy-z", "KO", "BUY", 3, 5.0)
@@ -235,8 +265,9 @@ def test_failed_transaction_rolls_back_everything(env):
 def test_cash_dividend_receivable_then_paid_once(env):
     hold(env.conn, "KO", 100, 50.0)
     res = result(action_type="現金股利", ratio_new_per_old=None, cash_per_share=0.5, pay_date="2026-11-01")
-    assert ca.verify(res, event(pb=None, pa=None), ca.position_of(env.conn, "KO")) == []
-    ca.apply(env.conn, env.paths, res, event(pb=None, pa=None), ASOF)
+    ev = event(pb=None, pa=None, alp_type="cash_dividend")
+    assert ca.verify(res, ev, ca.position_of(env.conn, "KO")) == []
+    ca.apply(env.conn, env.paths, res, ev, ASOF)
     assert total(env.conn, "dividend_receivable") == pytest.approx(50.0)
     assert total(env.conn, "dividend") == 0
 
@@ -350,10 +381,16 @@ def test_detect_alpaca_event_within_window(env):
     assert (e["price_before"], e["price_after"], e["date_before"], e["date_after"]) == (100.0, 25.0, "2026-10-15", ASOF)
 
 
-def test_detect_ignores_ex_date_outside_window(env):
-    old = dict(ALPACA_SPLIT, ex_date="2026-10-15")  # 不在 (prev, date] 內，不算 Alpaca 事件
+def test_detect_late_event_does_not_suppress_today_gap(env):
+    late = dict(ALPACA_SPLIT, ex_date="2026-10-15")  # 不在 (prev, date] 內：回看窗口內的晚到事件
+    evs = ca.detect(env.conn, ASOF, "2026-10-15", ["KO"], [late], {}, BARS_PREV, BARS_TODAY)
+    assert [e["source"] for e in evs] == ["alpaca", "gap"]  # 晚到事件照派，今天的價格跳空仍會被偵測到
+
+
+def test_detect_ignores_ex_date_outside_lookback(env):
+    old = dict(ALPACA_SPLIT, ex_date="2026-10-02")  # 恰在回看窗口 (date−14, date] 外
     evs = ca.detect(env.conn, ASOF, "2026-10-15", ["KO"], [old], {}, BARS_PREV, BARS_TODAY)
-    assert [e["source"] for e in evs] == ["gap"]  # 價格跳空仍會被偵測到
+    assert [e["source"] for e in evs] == ["gap"]
 
 
 def test_detect_8k_items(env):

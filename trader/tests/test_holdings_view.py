@@ -128,7 +128,7 @@ def test_weakest_only_at_max_holdings(env):
 def test_for_ticker_excludes_self(env):
     conn, paths = env
     _hold(conn, paths, "AAA", 10, 50.0)
-    _hold(conn, paths, "BBB", 10, 50.0, oe=2.0)
+    _hold(conn, paths, "BBB", 10, 50.0, oe=4.0)   # 上限≈60.9 > 收盤 50：合法可加碼（M6-D2-05），仍弱於 AAA
     v = H.holdings_g8(conn, paths, ASOF, _px(AAA=50.0, BBB=50.0), None)
     f = H.for_ticker(v, "AAA")
     assert [r["ticker"] for r in f["holdings"]] == ["BBB"]

@@ -7,7 +7,14 @@ from typing import Any
 
 JOB_TYPES = ("DOSSIER", "TRIAGE", "PRICE", "THESIS", "FULL_A", "FULL_B", "RED_TEAM", "CORP_ACTION", "HOLD_REVIEW")
 TIERS = ("strong", "medium", "weak")
-BACKENDS = ("claude_code", "openai_compat", "fake")
+BACKENDS = ("claude_code", "openai_compat", "fake", "hark_queue")
+# 代理式後端：模型自己讀寫沙箱檔（提示只列檔名、路徑為沙箱絕對路徑）。hark_queue＝Hark 子代理經檔案佇列作答
+AGENTIC_BACKENDS = frozenset({"claude_code", "hark_queue"})
+
+
+def prompt_backend(backend: str) -> str:
+    """建提示時採用的後端型態：代理式後端一律比照 claude_code。"""
+    return "claude_code" if backend in AGENTIC_BACKENDS else backend
 
 # 沙箱內不得出現價格的工作（routing defaults.price_isolation；DOSSIER 也不給價格檔）
 PRICE_ISOLATED_JOBS = frozenset({"DOSSIER", "TRIAGE", "THESIS", "FULL_A"})
@@ -19,7 +26,10 @@ class JobStatus:
     DONE = "done"
     FAILED = "failed"
     SKIPPED = "skipped"
-    TERMINAL = frozenset({"done", "failed", "skipped"})
+    # 設計決策 D43：輸出重試後仍不合格、處理器已寫保守結論（on_invalid）的終態。
+    # 不算失敗（不寫 job_failed、不讓 run 記 failed、不擋買），jobs retry 不重跑；引擎另記一筆低嚴重度異常
+    CONSERVATIVE_FALLBACK = "conservative_fallback"
+    TERMINAL = frozenset({"done", "failed", "skipped", "conservative_fallback"})
 
 
 @dataclass

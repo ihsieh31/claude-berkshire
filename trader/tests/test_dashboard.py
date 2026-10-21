@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from test_approvals import _env, _run_to_gate
+from test_engine import dossier_ok, full_responses
 
 from trader import db
 from trader.dashboard.server import TOKEN_FILE, create_app, ensure_token
@@ -91,7 +92,8 @@ def test_empty_summary(tmp_path):
 
 @pytest.fixture
 def api(tmp_path):
-    env = _env(tmp_path)
+    # 輸出 ticker 須與工作相符（M3_D1-10）：PEP 的 DOSSIER 回應另給，否則 PEP 停在 conservative_fallback、沒有同意列 #2
+    env = _env(tmp_path, {**full_responses(), ("DOSSIER", "PEP"): {**dossier_ok(), "ticker": "PEP"}})
     calls = []
     app = create_app(env.paths, PORT, spawn=lambda: calls.append(1))
     client = TestClient(app, base_url=f"http://127.0.0.1:{PORT}")
@@ -123,7 +125,7 @@ def test_host_guard_and_reads(api):
 def test_approve_requires_token_origin_json(api):
     env, client, tok, calls = api
     _run_to_gate(env)
-    body = json.dumps({"all": True})
+    body = json.dumps({"ids": [1]})
     j = {**H, "content-type": "application/json"}
     assert client.post("/api/approvals/approve", content=body, headers=j).status_code == 401
     assert client.post("/api/approvals/approve", content=body,
@@ -132,6 +134,9 @@ def test_approve_requires_token_origin_json(api):
                        headers={**H, "x-dashboard-token": tok, "content-type": "text/plain"}).status_code == 415
     assert calls == [] and env.conn.execute("SELECT status FROM approvals").fetchone()[0] == "pending"
 
+    # D54：不收 all（同意只涵蓋畫面上的編號）
+    assert client.post("/api/approvals/approve", content=json.dumps({"all": True}),
+                       headers={**j, "x-dashboard-token": tok}).status_code == 400
     r = client.post("/api/approvals/approve", content=body,
                     headers={**j, "x-dashboard-token": tok, "origin": f"http://127.0.0.1:{PORT}"})
     assert r.status_code == 200 and r.json() == {"approved": [1], "started": True, "note": None}

@@ -40,7 +40,8 @@ class CorpActionHandler(Handler):
             try:
                 body = ctx.sec.filing_text(ev["url"])
                 body += earnings_exhibit_any(ctx.sec, ev["url"])
-                ev["text"] = ev.get("text", "") + "\n\n8-K 原文：\n" + body[:CORP_8K_CHARS]
+                cut = "" if len(body) <= CORP_8K_CHARS else f"\n（原文已截斷，原長 {len(body)} 字，只附前 {CORP_8K_CHARS} 字）"
+                ev["text"] = ev.get("text", "") + "\n\n8-K 原文：\n" + body[:CORP_8K_CHARS] + cut   # M5-D5-06
             except Exception as e:  # noqa: BLE001
                 ev["text"] = ev.get("text", "") + f"\n（8-K 原文：缺，抓取失敗 {type(e).__name__}）"
         ev["filing_text_added"] = True
@@ -52,6 +53,8 @@ class CorpActionHandler(Handler):
         pos = ca.position_of(ctx.conn, T)
         orders = ca.open_orders_of(ctx.conn, T)
         return {
+            # 本工作不經 _vals、沙箱也沒有 pkg/：不給規則檔路徑，避免 {pkg} 落成真實專案根（M3-D10-04）
+            "pkg": "（本工作不提供規則檔）",
             "event_text": ev.get("text") or "（無事件原文）",
             "shares": str(pos["qty"]) if pos else "0",
             "cost": f"{pos['avg_cost']:.4f}" if pos else "無持股",
@@ -80,16 +83,20 @@ class CorpActionHandler(Handler):
 
         if errs:
             ca.reject(ctx.conn, result, ev, errs)
-            return []
-        out = ca.apply(ctx.conn, ctx.paths, result, ev, job.asof)
-        if out["status"] == "no_action":
-            return []
-        if out["status"] == "conflict":
-            ca.reject(ctx.conn, result, ev, out["errors"])
+            status = "rejected"
+        else:
+            out = ca.apply(ctx.conn, ctx.paths, result, ev, job.asof)
+            status = out["status"]
+            if status == "conflict":
+                ca.reject(ctx.conn, result, ev, out["errors"])
+        # 事件已有結果（含無公司行動、重複、轉人工）：先前工作失敗留下的異常結案，否則永久暫停、每日重派（M7-D1-01）
+        ca.resolve_job_failed(ctx.conn, ev.get("event_id"), status)
         return []
 
     def on_invalid(self, job: JobSpec, errors: list[str], ctx: HandlerCtx) -> list[JobSpec]:
-        ca.on_invalid(ctx.conn, job.job_id, job.ticker, job.asof, self._event(job), list(errors))
+        ev = self._event(job)
+        ca.on_invalid(ctx.conn, job.job_id, job.ticker, job.asof, ev, list(errors))
+        ca.resolve_job_failed(ctx.conn, (ev or {}).get("event_id"), "輸出不合格，已轉人工")
         return []
 
 

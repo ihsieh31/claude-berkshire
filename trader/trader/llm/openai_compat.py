@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from ..models import JobSpec, LLMResult, TierConfig
-from .base import FatalLLMError, TransportError, extract_json, materialize_files, write_raw
+from .base import FatalLLMError, LLMTimeout, TransportError, extract_json, materialize_files, write_raw
 
 _FATAL_STATUS = frozenset({400, 401, 403, 404})
 
@@ -68,7 +68,7 @@ class OpenAICompatRunner:
         try:
             resp = self.client.post(url, json=body, headers=headers)
         except httpx.TimeoutException as e:
-            raise TransportError("HTTP 逾時") from e
+            raise LLMTimeout("HTTP 逾時") from e   # D47：逾時重試 1 次（與 claude 逾時同類，A3-M5B-06）
         except httpx.HTTPError as e:
             raise TransportError(f"連線失敗（{type(e).__name__}）") from e
         latency = time.monotonic() - t0

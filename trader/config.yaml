@@ -8,34 +8,39 @@ account:
   commission_per_order: 0       # 每筆委託手續費（美元）
   benchmark: SPY                # 基準指數 ETF
 
-universe: sp500                 # 股票池
+universe: sp500                 # 股票池：目前只支援 sp500（其他值載入時報錯）；自訂名單用 state/universe_override.txt
 
 schedule:
   timezone: America/New_York
   daily_close: "17:30"          # 收盤後：公司行動、撮合、淨值、持股觸發檢查
-  review_holdings: daily        # 持股每天檢查（純程式）
-  review_watch: biweekly        # 觀察名單每兩週檢查
-  quarterly_screen: ["02-20", "05-20", "08-20", "11-20"]   # 季度初選日（MM-DD）
+  # 持股固定每天隨 daily 做觸發檢查（有訊號時會派模型工作），不需設定
+  review_watch: biweekly        # 觀察名單檢查間隔：biweekly（14 天）或 weekly（7 天）
+  quarterly_screen: ["03-20", "05-20", "08-20", "11-20"]   # 季度初選日（MM-DD）；2 月那次延到 03-20，等多數 10-K 申報完
   monthly_freeze: "01"         # 每月 1 日凍結 P/E 中位數
 
-# 模型等級。每級三選一後端：
+# 模型等級。各工作用哪一級見 routing/model_routing.json（job_tier_overrides 可覆寫）：
+#   強 strong：FULL_A、RED_TEAM（approval.require_for_tiers 預設須同意）
+#   中 medium：FULL_B、HOLD_REVIEW、持股 THESIS
+#   弱 weak  ：DOSSIER、TRIAGE、PRICE、CORP_ACTION、非持股 THESIS
+# 每級四選一後端：
 #   claude_code    ：呼叫本機 claude CLI（只需 model，可用 claude_bin 指定執行檔）
 #   openai_compat  ：OpenAI 相容 API（需 base_url、api_key_env、model）
 #   fake           ：假回應，僅供測試與 dry-run，不連網
+#   hark_queue     ：Hark 工作區專用（交給 Hark 代理執行），使用者電腦不用
 models:
-  strong:                       # 強：FULL_B、RED_TEAM 等
+  strong:                       # 強：FULL_A、RED_TEAM（須同意）
     backend: claude_code
     model: opus
     effort: medium                # 思考強度，明確傳給 claude --effort（全部統一 medium）
     timeout_s: 1800
     concurrency: 1
-  medium:                       # 中：一般深度分析
+  medium:                       # 中：FULL_B、HOLD_REVIEW、持股 THESIS
     backend: claude_code
     model: sonnet
     effort: medium                # 思考強度，明確傳給 claude --effort（全部統一 medium）
     timeout_s: 1200
     concurrency: 2
-  weak:                         # 弱：篩選與分流
+  weak:                         # 弱：DOSSIER、TRIAGE、PRICE、CORP_ACTION、非持股 THESIS
     backend: claude_code
     model: haiku
     effort: medium                # 思考強度，明確傳給 claude --effort（全部統一 medium）
@@ -56,6 +61,8 @@ data:
   alpaca_secret_env: ALPACA_SECRET_KEY  # Alpaca API 密鑰環境變數名稱
   alpaca_feed: iex                      # 免費方案用 iex；付費方案用 sip
   fred_key_env: FRED_API_KEY            # FRED API 金鑰環境變數名稱
+  research_price_source: alpaca         # 初選／深度分析取價來源：alpaca | yahoo（撮合、限價、ADV 一律 Alpaca）
+  adv_feed: iex                         # daily ADV 用的 Alpaca feed；確認帳戶可取 SIP 歷史後才改 sip
 
 dashboard:
   host: 127.0.0.1               # 僅本機連線；遠端查看請走其他通道

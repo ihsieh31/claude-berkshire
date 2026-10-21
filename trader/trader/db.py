@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,7 +63,13 @@ CREATE TABLE approvals(approval_id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEX
 CREATE INDEX approvals_status ON approvals(status);
 """
 
-MIGRATIONS: list[str] = [_V1, _V2]
+# 版本 3（D51）：決策來源欄。JSON（例 {"origin":..,"backend":..,"effort":..,"price_source":..}），NULL＝未標記；
+# 由產生／匯出資料的一方填寫，框架不解讀
+_V3 = """
+ALTER TABLE decisions ADD COLUMN provenance TEXT;
+"""
+
+MIGRATIONS: list[str] = [_V1, _V2, _V3]
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -73,9 +80,16 @@ def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
+    for i in range(50):   # 新檔切 WAL 時同時開啟的連線會直接 locked（不走忙碌等待），稍候重試（M8-D1-06）
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            break
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) or i == 49:
+                raise
+            time.sleep(0.1)
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -94,26 +108,92 @@ def _current_version(conn: sqlite3.Connection) -> int:
     return int(row["v"] or 0)
 
 
+def _statements(sql: str) -> list[str]:
+    """把版本 SQL 切成單一敘述（sqlite3.complete_statement 判斷結尾，觸發器等含分號的敘述也正確）。"""
+    out, buf = [], ""
+    for piece in sql.split(";"):
+        buf += piece + ";"
+        if sqlite3.complete_statement(buf):
+            out.append(buf.strip())
+            buf = ""
+    if buf.strip(" \n;"):
+        out.append(buf.strip())
+    return out
+
+
 def migrate(conn: sqlite3.Connection) -> int:
-    """套用尚未套用的版本，回傳目前版本。冪等。每個版本在單一交易內套用。"""
+    """套用尚未套用的版本，回傳目前版本。冪等。
+    先取寫鎖（BEGIN IMMEDIATE）再於交易內重讀版本：兩個行程同時 migrate 新 DB 時後到者等鎖、看到已套用就略過（M8-D1-06）。
+    資料庫版本比程式新 → RuntimeError（舊程式不得靜默開新 DB，M8-D9-07）。"""
+    def newer(v: int) -> None:
+        if v > len(MIGRATIONS):
+            raise RuntimeError(f"資料庫 schema 版本 {v} 比程式新（{len(MIGRATIONS)}）：請先更新程式")
+
     current = _current_version(conn)
-    for i, sql in enumerate(MIGRATIONS, start=1):
-        if i <= current:
-            continue
-        stamp = now_iso()
-        script = (
-            "BEGIN;\n" + sql + "\n"
-            f"INSERT INTO schema_version(version, applied_at) VALUES ({i}, '{stamp}');\n"
-            "COMMIT;"
-        )
-        try:
-            conn.executescript(script)
-        except Exception:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            raise
-        current = i
+    newer(current)
+    if current == len(MIGRATIONS):
+        return current   # 已是最新：不取寫鎖（一般指令的常態）
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        current = _current_version(conn)
+        newer(current)
+        for i, sql in enumerate(MIGRATIONS, start=1):
+            if i <= current:
+                continue
+            for stmt in _statements(sql):
+                conn.execute(stmt)
+            conn.execute("INSERT INTO schema_version(version, applied_at) VALUES (?, ?)", (i, now_iso()))
+            current = i
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     return current
+
+
+BACKUP_KEEP = 14   # 本機快照保留最近 14 份，另每個月保留最早的一份（M8-D4-01）
+
+
+def backup(db_path: Path, note: str | None = None, keep: int = BACKUP_KEEP) -> Path:
+    """本機快照（`trader db backup`；排程 daily 成功後自動呼叫）：先跑 PRAGMA integrity_check，非 ok → 寫一筆
+    db_integrity 異常並 RuntimeError（不寫快照、不刪舊快照）；否則以 sqlite backup API 寫
+    {db 目錄}/backups/trader-YYYYMMDD-HHMMSS[-note].db（本機時間），再修剪：保留最近 keep 份＋每月最早一份。"""
+    db_path = Path(db_path)
+    out_dir = db_path.parent / "backups"
+    src = connect(db_path)
+    try:
+        ok = src.execute("PRAGMA integrity_check").fetchone()[0]
+        if ok != "ok":
+            try:
+                src.execute("INSERT INTO anomalies(ticker, kind, detail, status, pause_trading, created_at) "
+                            "VALUES (NULL, 'db_integrity', ?, 'open', 0, ?)", (str(ok)[:2000], now_iso()))
+                src.commit()
+            except sqlite3.Error:
+                pass
+            raise RuntimeError(f"資料庫完整性檢查未通過（{str(ok)[:200]}），不寫快照")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        tag = re.sub(r"[^A-Za-z0-9._-]+", "_", note or "").strip("_")[:40]
+        stem = f"trader-{datetime.now():%Y%m%d-%H%M%S}" + (f"-{tag}" if tag else "")
+        dest, n = out_dir / f"{stem}.db", 1
+        while dest.exists():
+            dest, n = out_dir / f"{stem}-{n}.db", n + 1
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    snaps = sorted(out_dir.glob("trader-[0-9]*.db"))   # 檔名以時間開頭：字典序＝時間序
+    monthly = {}
+    for f in snaps:
+        monthly.setdefault(f.name[7:13], f)            # YYYYMM → 當月最早一份
+    for f in snaps[:-keep] if keep > 0 else snaps:
+        if f != dest and f not in monthly.values():
+            f.unlink()
+    return dest
 
 
 def _encode(value):

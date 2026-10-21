@@ -65,9 +65,9 @@ def test_buy_fills_only_on_next_trading_day(conn):
     assert broker.match_orders(conn, D1, {"AAPL": _bar(99, 101, 98)}, 0, 0) == []
     fills = broker.match_orders(conn, D2, {"AAPL": _bar(99, 101, 98)}, 0, 0)
     assert len(fills) == 1
-    assert fills[0]["price"] == 99.0  # min(open, limit)
+    assert fills[0]["price"] == pytest.approx(99.3333)  # min(典型價 (101+98+99)/3, 限價)（D07）
     assert fills[0]["qty"] == 10
-    assert book.cash(conn) == pytest.approx(10_000 - 990.0)
+    assert book.cash(conn) == pytest.approx(10_000 - 993.33)
     assert book.positions(conn)["AAPL"]["qty"] == 10
 
 
@@ -118,7 +118,7 @@ def test_avg_cost_and_first_buy_date(conn):
     assert pos["first_buy_date"] == "2026-10-15"
 
 
-def test_sell_limit_none_fills_at_open_with_slippage(conn):
+def test_sell_limit_none_fills_at_typical_with_slippage(conn):
     book.ensure_initial_deposit(conn, 10_000, D0)
     _buy_fill(conn, "AAPL", 10, 100.0, 100.0)
     broker.place_order(conn, "AAPL", "SELL", 10, None, None, "2026-10-16")
@@ -130,10 +130,14 @@ def test_sell_limit_none_fills_at_open_with_slippage(conn):
 def test_sell_limit_requires_high_reaching_limit(conn):
     book.ensure_initial_deposit(conn, 10_000, D0)
     _buy_fill(conn, "AAPL", 10, 100.0, 100.0)
-    broker.place_order(conn, "AAPL", "SELL", 10, 120.0, None, "2026-10-16")
+    oid = broker.place_order(conn, "AAPL", "SELL", 10, 120.0, None, "2026-10-16")
     assert broker.match_orders(conn, "2026-10-19", {"AAPL": _bar(118, 119, 117)}, 0, 0) == []
+    # 限價賣單（估值 TRIM）當日有效：未觸及即作廢，不留到隔日（D03）
+    r = conn.execute("SELECT status, cancel_reason FROM orders WHERE order_id=?", (oid,)).fetchone()
+    assert r["status"] == "expired" and "當日有效" in r["cancel_reason"]
+    broker.place_order(conn, "AAPL", "SELL", 10, 120.0, None, "2026-10-19")
     fills = broker.match_orders(conn, "2026-10-20", {"AAPL": _bar(118, 121, 117)}, 0, 0)
-    assert fills[0]["price"] == 120.0  # max(open, limit)
+    assert fills[0]["price"] == 120.0  # max(典型價 118.67, 限價)
 
 
 def test_sell_all_deletes_position_and_sets_registry_watch(conn):
